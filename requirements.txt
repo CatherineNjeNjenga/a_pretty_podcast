@@ -1,0 +1,7 @@
+apify-client
+nltk
+pandas
+numpy
+plotly
+kaleido
+requests
