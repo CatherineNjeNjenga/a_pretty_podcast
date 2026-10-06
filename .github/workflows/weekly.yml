@@ -41,6 +41,7 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           CHANNEL_ID: ${{ vars.CHANNEL_ID }}
           TITLE_FILTER: ${{ vars.TITLE_FILTER }}
+          PLAYLIST_ID: ${{ vars.PLAYLIST_ID }}
           WATCH_FROM_DATE: ${{ vars.WATCH_FROM_DATE }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python watch_feed.py
