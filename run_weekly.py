@@ -5,9 +5,10 @@ Usage:
 
 Flow
   1. Load episodes.csv (one row per episode you add) into the episodes table.
-  2. For each pending episode that is at least SNAPSHOT_DAYS old, fetch its comments ONCE
-     (fixed snapshot so episodes are comparable), tag who each comment is about, score
-     sentiment, store, mark done.
+  2. For each pending episode that is at least SNAPSHOT_DAYS old, fetch its comments ONCE,
+     keep only comments posted during the first SNAPSHOT_DAYS after that episode was uploaded,
+     then tag who each comment is about, score sentiment, store, and mark done. This makes old
+     back-catalogue episodes directly comparable with newly matured episodes.
   3. Purge raw comment text older than PURGE_AFTER_DAYS (YouTube's developer policies cap
      storage of public comment data at 30 days). Tags, sentiment and likes are kept.
   4. Recompute the Maria-vs-guest statistics over ALL stored episodes, append a row to
@@ -75,7 +76,45 @@ def fetch(episodes):
         from scrape_youtube import fetch_comments
         return fetch_comments([e["video_url"] for e in episodes])
     import youtube_api
-    return youtube_api.fetch_comments([e["video_id"] for e in episodes])
+    df = youtube_api.fetch_comments([e["video_id"] for e in episodes])
+    if not df.empty:
+        # Use YouTube's exact upload timestamp, not just the YYYY-MM-DD in episodes.csv.
+        published = youtube_api.video_published_times([e["video_id"] for e in episodes])
+        df["video_published_at"] = df["video_id"].map(published)
+    return df
+
+
+def first_window_only(d, episode):
+    """Keep only comments posted in the first SNAPSHOT_DAYS after upload.
+
+    The official API path supplies the video's exact publishedAt timestamp. For an
+    alternate source such as Apify, fall back to midnight UTC on episodes.csv's
+    published date. Unparseable/missing comment dates are dropped rather than
+    silently allowing older comments to bias the comparison.
+    """
+    if d.empty:
+        return d
+    if "date" not in d.columns:
+        raise RuntimeError("Comment source did not return a date; cannot enforce the 7-day comparison window.")
+
+    exact = None
+    if "video_published_at" in d.columns:
+        vals = d["video_published_at"].dropna()
+        if not vals.empty:
+            exact = vals.iloc[0]
+    start = pd.to_datetime(exact or episode["published"], errors="coerce", utc=True)
+    if pd.isna(start):
+        raise RuntimeError(f"Could not parse upload date for {episode['video_id']}: {episode['published']}")
+    end = start + pd.Timedelta(days=SNAPSHOT_DAYS)
+
+    comment_time = pd.to_datetime(d["date"], errors="coerce", utc=True)
+    bad = int(comment_time.isna().sum())
+    keep = comment_time.notna() & (comment_time >= start) & (comment_time < end)
+    kept = d.loc[keep].copy()
+    if bad:
+        print(f"  {episode['video_id']}: dropped {bad} comment(s) with missing/unparseable dates")
+    print(f"  {episode['video_id']}: first-{SNAPSHOT_DAYS}-days window kept {len(kept)} of {len(d)} fetched comments")
+    return kept
 
 
 def ingest(db, episodes, today):
@@ -87,6 +126,15 @@ def ingest(db, episodes, today):
         d = raw[raw["video_id"] == e["video_id"]].copy() if not raw.empty else raw
         if d.empty:
             print(f"  {e['video_id']}: no comments returned, leaving pending")
+            continue
+        d = first_window_only(d, e)
+        if d.empty:
+            # The episode has matured past the 7-day mark, so zero qualifying comments
+            # is a valid snapshot rather than a reason to keep retrying forever.
+            db.execute("UPDATE episodes SET status='done', n_comments=0, snapshot_at=? WHERE video_id=?",
+                       (today.isoformat(), e["video_id"]))
+            print(f"  {e['video_id']}: stored 0 comments in the first-{SNAPSHOT_DAYS}-days window")
+            done += 1
             continue
         d["comment"] = d["comment"].fillna("").astype(str)
         d = d[d["comment"].str.len() > 0]
