@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: pretty-tough
@@ -34,9 +35,22 @@ jobs:
           pip install -r requirements.txt
           plotly_get_chrome -y || true
 
+      - name: Check feed for new episodes
+        continue-on-error: true
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          CHANNEL_ID: ${{ vars.CHANNEL_ID }}
+          TITLE_FILTER: ${{ vars.TITLE_FILTER }}
+          WATCH_FROM_DATE: ${{ vars.WATCH_FROM_DATE }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python watch_feed.py
+
       - name: Run pipeline
         id: pipeline
         env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          COMMENT_SOURCE: ${{ vars.COMMENT_SOURCE }}
+          INCLUDE_REPLIES: ${{ vars.INCLUDE_REPLIES }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           APIFY_ACTOR_ID: ${{ vars.APIFY_ACTOR_ID }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
