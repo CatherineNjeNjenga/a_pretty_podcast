@@ -1,0 +1,42 @@
+name: list-episodes
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_uploads:
+        description: "How many recent uploads to list (max a few hundred)"
+        default: "200"
+
+permissions:
+  contents: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests pandas
+
+      - name: List uploads and playlists
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          CHANNEL_ID: ${{ vars.CHANNEL_ID }}
+          TITLE_FILTER: ${{ vars.TITLE_FILTER }}
+          MAX_ITEMS: ${{ inputs.max_uploads }}
+        run: python list_channel.py
+
+      - name: Upload CSVs
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-listing
+          path: |
+            uploads.csv
+            playlists.csv
+          retention-days: 14
