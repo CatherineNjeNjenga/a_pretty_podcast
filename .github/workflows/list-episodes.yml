@@ -6,6 +6,10 @@ on:
       max_uploads:
         description: "How many recent uploads to list (max a few hundred)"
         default: "200"
+      playlist_id:
+        description: "Podcast playlist ID or link (starts with PL). Leave empty to use the PLAYLIST_ID repo variable"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -29,6 +33,7 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           CHANNEL_ID: ${{ vars.CHANNEL_ID }}
           TITLE_FILTER: ${{ vars.TITLE_FILTER }}
+          PLAYLIST_ID: ${{ inputs.playlist_id || vars.PLAYLIST_ID }}
           MAX_ITEMS: ${{ inputs.max_uploads }}
         run: python list_channel.py
 
