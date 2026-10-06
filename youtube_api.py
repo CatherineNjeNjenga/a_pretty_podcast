@@ -103,6 +103,24 @@ def fetch_comments(video_ids, api_key=None, max_comments=None, include_replies=N
     return pd.DataFrame(rows)
 
 
+def video_published_times(video_ids, api_key=None):
+    """Return exact YouTube upload timestamps (UTC) keyed by video id.
+
+    episodes.csv stores a calendar date for readability, but the first-7-days
+    comparison should use the actual upload time whenever the official API is
+    available. videos.list accepts up to 50 IDs per request.
+    """
+    api_key = _key(api_key)
+    ids = list(dict.fromkeys(video_ids))
+    out = {}
+    for i in range(0, len(ids), 50):
+        chunk = ids[i:i + 50]
+        data = _get("videos", {"part": "snippet", "id": ",".join(chunk), "maxResults": 50}, api_key)
+        for it in data.get("items", []):
+            out[it["id"]] = it.get("snippet", {}).get("publishedAt")
+    return out
+
+
 def playlist_videos(playlist_id, api_key=None, max_items=50):
     """Videos in any playlist, newest-added first (1 quota unit per 50)."""
     api_key = _key(api_key)
