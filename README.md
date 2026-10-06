@@ -8,7 +8,8 @@ as each new episode passes its 7-day comment snapshot.
   (`video_url, published, guest, guest_aliases, guest_tier`). Aliases are lowercase, pipe-separated
   (include nicknames). Tier is optional: 1 mega-famous, 2 well known, 3 niche.
 - A daily GitHub Actions run (`.github/workflows/weekly.yml`) looks for episodes that are 7+ days old and
-  not yet processed, scrapes their comments once (fixed snapshot, so episodes are comparable), scores
+  not yet processed, fetches their comments once, **keeps only comments posted in the first 7 days after
+  each episode's upload** (so back-catalogue and new episodes are comparable), scores
   sentiment with VADER, and saves everything to Turso.
 - It then re-tags all stored comments, recomputes the cumulative Maria-minus-guest gap, appends a row to
   `weekly_metrics`, and uploads charts and CSVs as a workflow artifact (kept 90 days).
@@ -64,8 +65,9 @@ To load past episodes: `export YOUTUBE_API_KEY=...` then `python backfill_episod
 It writes `episodes_draft.csv` (matching uploads not yet in `episodes.csv`, guests guessed from titles).
 Review it, drop the `title_for_reference` column, and append the rows to `episodes.csv`. To stop the watcher
 alerting about older uploads, set the repo variable `WATCH_FROM_DATE` (YYYY-MM-DD) to your start date.
-Older episodes are scraped when the pipeline first runs, not at 7 days, so they carry more comments than
-future episodes; report them as a separate historical group.
+Older episodes may be fetched months later, but the pipeline filters by each comment's timestamp and keeps
+only the first 7 days after that episode's upload. They can therefore be included in the same comparison as
+new episodes without giving the back catalogue a longer time to accumulate comments.
 
 ## Weekly routine
 1. When the GitHub issue arrives, paste its row into `episodes.csv` (fix guest and aliases) and commit.
