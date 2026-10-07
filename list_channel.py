@@ -7,7 +7,7 @@ but it also works on your own machine:
 
 Unlike watch_feed.py --list, nothing is filtered out here; a column shows whether each title matches
 the current TITLE_FILTER. Playlist IDs (PL...) are printed so you can pick the Pretty Tough playlist.
-Writes uploads.csv and playlists.csv, and a readable table to the Actions job summary.
+Writes uploads.csv, playlists.csv and episodes_draft.csv, and a readable table to the Actions job summary.
 """
 import os
 import sys
@@ -43,6 +43,16 @@ def main():
         w.writeheader()
         for u in sorted(uploads, key=lambda x: x["published"], reverse=True):
             w.writerow({k: u[k] for k in w.fieldnames})
+    # Draft in the exact shape episodes.csv needs. Guest, aliases and tier are left blank for you to fill in
+    # (the extra title_for_reference column is ignored by the pipeline, so you can leave it in).
+    with open("episodes_draft.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["video_url", "published", "guest", "guest_aliases", "guest_tier",
+                                          "title_for_reference"])
+        w.writeheader()
+        for u in sorted(uploads, key=lambda x: x["published"]):
+            if is_episode(u):
+                w.writerow({"video_url": u["url"], "published": u["published"], "guest": "", "guest_aliases": "",
+                            "guest_tier": "", "title_for_reference": u["title"]})
     with open("playlists.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["playlist_id", "title", "video_count", "url"])
         w.writeheader()
