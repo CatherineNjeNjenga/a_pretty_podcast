@@ -11,7 +11,10 @@ Inputs
 
 Method
     - A comment is "Maria" if it names her (maria, sharapova, masha), "Guest" if it
-      names the guest (any alias), "Both" if it names both, "Neither" otherwise.
+      names the guest (any alias), "Both" if it names both. Comments naming neither are "Show" if they
+      talk about the show/episode itself (SHOW_WORDS: podcast, episode, interview, ...) and carry a clear
+      positive or negative tone (|VADER compound| >= SHOW_MIN), otherwise "Neither".
+      Tagging needs the VADER score first, so always run score() before tag().
     - Per episode: share of ALL comments, and share of NAMED comments (Maria+Guest),
       each also like-weighted. Maria share minus guest share is the episode's gap.
     - Test: sign test and bootstrap CI on the per-episode gap, across episodes.
@@ -28,7 +31,13 @@ from plotly.subplots import make_subplots
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
 MARIA = re.compile(r"\b(maria|sharapova|masha)\b", re.I)
-C_MARIA, C_GUEST, GRID = "#C8553D", "#2A6F97", "#E6E6E6"
+# Palette checked with the dataviz validator (light surface): all PASS. Neither is a neutral gray, not a hue.
+C_MARIA, C_GUEST, C_BOTH, C_SHOW, C_NEITHER, GRID = "#C8553D", "#1B74B8", "#B8860B", "#2A9D6F", "#C9C9C9", "#E6E6E6"
+SHOW_WORDS = ("show|podcast|episode|episodes|interview|interviews|conversation|series|channel|video|content|"
+              "host|hosts|hosting|questions?|listen|listening|listened|watch|watching|watched|format|"
+              "production|audio|editing|talk")
+SHOW_RX = re.compile(r"\b(?:" + SHOW_WORDS + r")\b", re.I)
+SHOW_MIN = 0.05   # |compound| below this is treated as no clear praise or criticism
 RNG = np.random.default_rng(42)
 
 
@@ -56,7 +65,11 @@ def tag(df):
     m = df["comment"].apply(lambda t: bool(MARIA.search(t)))
     gst = pd.Series([bool(rx[v].search(t)) if rx[v] else False for v, t in zip(df["video_id"], df["comment"])],
                     index=df.index)
-    df["about"] = np.select([m & gst, m, gst], ["Both", "Maria", "Guest"], default="Neither")
+    about = np.select([m & gst, m, gst], ["Both", "Maria", "Guest"], default="Neither")
+    if "compound" not in df.columns:
+        raise ValueError("tag() needs the 'compound' column: run score() first")
+    on_show = (df["comment"].apply(lambda t: bool(SHOW_RX.search(t))) & (df["compound"].abs() >= SHOW_MIN)).values
+    df["about"] = np.where((about == "Neither") & on_show, "Show", about)
     return df
 
 
@@ -81,6 +94,11 @@ def per_episode(df, min_named=10):
             "maria_share_named": mar.sum() / named.sum() if named.sum() else np.nan,
             "guest_share_named": gst.sum() / named.sum() if named.sum() else np.nan,
             "maria_likeshare": w[mar].sum() / w.sum(), "guest_likeshare": w[gst].sum() / w.sum(),
+            "only_maria_share": (d["about"] == "Maria").mean(), "only_guest_share": (d["about"] == "Guest").mean(),
+            "both_share": (d["about"] == "Both").mean(), "show_share_all": (d["about"] == "Show").mean(),
+            "neither_share_all": (d["about"] == "Neither").mean(),
+            "show_pos_share": ((d["about"] == "Show") & (d["compound"] > 0)).mean(),
+            "show_neg_share": ((d["about"] == "Show") & (d["compound"] < 0)).mean(),
         })
     e = pd.DataFrame(rows)
     e["gap_all"] = e["maria_share_all"] - e["guest_share_all"]
@@ -140,13 +158,39 @@ def chart_dumbbell(e):
 
 
 def chart_sentiment(df):
-    d = df[df["about"].isin(["Maria", "Guest"])]
+    d = df[df["about"].isin(["Maria", "Guest", "Show"])]
     fig = go.Figure()
-    for who, col in [("Maria", C_MARIA), ("Guest", C_GUEST)]:
+    for who, col in [("Maria", C_MARIA), ("Guest", C_GUEST), ("Show", C_SHOW)]:
         s = d[d["about"] == who]["compound"]
         fig.add_trace(go.Box(y=s, name=f"{who} (n={len(s)})", marker_color=col, boxmean=True))
-    style(fig, "Tone of comments that name only Maria vs only the guest", 1000, 900)
+    style(fig, "Tone of comments about only Maria, only the guest, or the show itself", 1000, 900)
     fig.update_yaxes(title_text="VADER compound (-1 to +1)", range=[-1, 1], gridcolor=GRID)
+    return fig
+
+
+MIX = [("Maria", "only Maria", C_MARIA), ("Guest", "only guest", C_GUEST), ("Both", "both named", C_BOTH),
+       ("Show", "the show/episode", C_SHOW), ("Neither", "neither / other", C_NEITHER)]
+
+
+def chart_mix(df):
+    """What are comments about? Stacked 100% bars per episode, plus an all-episodes row with direct labels."""
+    order = ("published" if "published" in df.columns else "guest")
+    names = df.drop_duplicates("video_id").sort_values(order)["guest"].tolist()
+    rows = [(g, d["about"].value_counts(normalize=True)) for g, d in
+            sorted(df.groupby("guest"), key=lambda kv: names.index(kv[0]))]
+    rows.append(("ALL EPISODES", df["about"].value_counts(normalize=True)))
+    labels = [r[0] for r in rows]
+    fig = go.Figure()
+    for key, nice, col in MIX:
+        vals = [float(r[1].get(key, 0.0)) for r in rows]
+        txt = [f"{v:.0%}" if (lab == "ALL EPISODES" and v >= 0.04) else "" for lab, v in zip(labels, vals)]
+        fig.add_trace(go.Bar(y=labels, x=vals, orientation="h", name=nice, marker=dict(color=col, line=dict(color="#FFFFFF", width=2)),
+                             text=txt, textposition="inside", textfont=dict(color="#FFFFFF" if key != "Neither" else "#333333"),
+                             hovertemplate="%{y}: %{x:.1%}<extra>" + nice + "</extra>"))
+    style(fig, "What are the comments about? Share of each episode's comments", 1500, max(700, 40 * len(rows) + 250))
+    fig.update_layout(barmode="stack")
+    fig.update_xaxes(title_text="Share of episode comments", tickformat=".0%", range=[0, 1], gridcolor=GRID)
+    fig.update_yaxes(title_text="", autorange="reversed")
     return fig
 
 
@@ -164,7 +208,7 @@ def chart_fame(e):
 
 
 def main(cpath, gpath):
-    df = score(tag(load(cpath, gpath)))
+    df = tag(score(load(cpath, gpath)))
     e = per_episode(df)
     df.to_csv("tagged_comments.csv", index=False)
     e.to_csv("episode_summary.csv", index=False)
@@ -174,7 +218,8 @@ def main(cpath, gpath):
     print("\nTEST OF THE CLAIM")
     for line in verdict(e):
         print(" -", line)
-    figs = [("who_gets_talked_about", chart_dumbbell(e)), ("tone_maria_vs_guest", chart_sentiment(df))]
+    figs = [("who_gets_talked_about", chart_dumbbell(e)), ("tone_maria_vs_guest", chart_sentiment(df)),
+            ("what_comments_are_about", chart_mix(df))]
     fame = chart_fame(e)
     if fame is not None:
         figs.append(("guest_fame_vs_gap", fame))
