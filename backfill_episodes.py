@@ -9,9 +9,8 @@ TITLE_FILTER (default "pretty tough"), skips videos already in episodes.csv, and
 MUST review: fix guest names, add nicknames to guest_aliases, optionally set guest_tier, then append
 the rows to episodes.csv. Check with `python watch_feed.py --list` that the filter matches your titles.
 
-Older episodes can be added safely: the weekly pipeline fetches their available comments but retains
-only comments posted within the first 7 days after each episode's YouTube upload, making back-catalogue
-and newly matured episodes comparable.
+Note: for every episode the pipeline counts only comments posted in its first 7 days (upload day plus the
+next six), so older episodes stay comparable with new ones.
 """
 import re
 import csv
