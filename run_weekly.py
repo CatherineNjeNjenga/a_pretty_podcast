@@ -5,11 +5,9 @@ Usage:
 
 Flow
   1. Load episodes.csv (one row per episode you add) into the episodes table.
-  2. For each pending episode that is at least SNAPSHOT_DAYS old, fetch its comments ONCE,
-     keep only comments posted during the first SNAPSHOT_DAYS after that episode was uploaded,
-     then tag who each comment is about, score sentiment, store, and mark done. This makes old
-     back-catalogue episodes directly comparable with newly matured episodes.
-  3. Purge raw comment text older than PURGE_AFTER_DAYS (YouTube's developer policies cap
+  2. For each pending episode that is at least SNAPSHOT_DAYS old, fetch its comments ONCE and keep only those
+     posted in its first SNAPSHOT_DAYS days (so old and new episodes are comparable), score sentiment, tag who each comment is about (Maria / guest / both / the show / neither), store, mark done.
+  3. Re-tag stored comments whose text is still held (so tag rule changes apply), then purge raw comment text older than PURGE_AFTER_DAYS (YouTube's developer policies cap
      storage of public comment data at 30 days). Tags, sentiment and likes are kept.
   4. Recompute the Maria-vs-guest statistics over ALL stored episodes, append a row to
      weekly_metrics, and write charts + CSVs (no comment text) to the output folder.
@@ -34,6 +32,9 @@ import analyze_youtube as a
 SNAPSHOT_DAYS = 7
 PURGE_AFTER_DAYS = 28     # margin under the 30-day limit
 EPISODES_CSV = "episodes.csv"
+QUOTA_REASONS = ("quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded")
+SCAN_CAP = int(os.environ.get("MAX_SCAN") or 30000)   # safety cap on comments scanned per episode
+FAILED = []                                           # episodes whose fetch failed unexpectedly this run
 VID_RX = re.compile(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})")
 
 
@@ -71,71 +72,62 @@ def due_episodes(db, today):
     return [p for p in pending if datetime.strptime(p["published"], "%Y-%m-%d").date() <= cutoff]
 
 
-def fetch(episodes):
-    if os.environ.get("COMMENT_SOURCE", "youtube_api") == "apify":
+def fetch_one(e):
+    if os.environ.get("COMMENT_SOURCE") == "apify":
         from scrape_youtube import fetch_comments
-        return fetch_comments([e["video_url"] for e in episodes])
+        return fetch_comments([e["video_url"]])
     import youtube_api
-    df = youtube_api.fetch_comments([e["video_id"] for e in episodes])
-    if not df.empty:
-        # Use YouTube's exact upload timestamp, not just the YYYY-MM-DD in episodes.csv.
-        published = youtube_api.video_published_times([e["video_id"] for e in episodes])
-        df["video_published_at"] = df["video_id"].map(published)
-    return df
+    return youtube_api.fetch_comments([e["video_id"]], max_comments=SCAN_CAP)
 
 
-def first_window_only(d, episode):
-    """Keep only comments posted in the first SNAPSHOT_DAYS after upload.
-
-    The official API path supplies the video's exact publishedAt timestamp. For an
-    alternate source such as Apify, fall back to midnight UTC on episodes.csv's
-    published date. Unparseable/missing comment dates are dropped rather than
-    silently allowing older comments to bias the comparison.
-    """
-    if d.empty:
+def windowed(d, e):
+    """Keep only comments posted in the first SNAPSHOT_DAYS days (upload day plus the next six, UTC), so
+    old and new episodes are measured over the same period. Returns None if the window can't be proven complete."""
+    vid = e["video_id"]
+    if os.environ.get("COMMENT_SOURCE") == "apify" or "date" not in d.columns:
+        print(f"  {vid}: no usable comment dates, {SNAPSHOT_DAYS}-day window NOT applied")
         return d
-    if "date" not in d.columns:
-        raise RuntimeError("Comment source did not return a date; cannot enforce the 7-day comparison window.")
-
-    exact = None
-    if "video_published_at" in d.columns:
-        vals = d["video_published_at"].dropna()
-        if not vals.empty:
-            exact = vals.iloc[0]
-    start = pd.to_datetime(exact or episode["published"], errors="coerce", utc=True)
-    if pd.isna(start):
-        raise RuntimeError(f"Could not parse upload date for {episode['video_id']}: {episode['published']}")
+    start = pd.Timestamp(e["published"], tz="UTC")
     end = start + pd.Timedelta(days=SNAPSHOT_DAYS)
-
-    comment_time = pd.to_datetime(d["date"], errors="coerce", utc=True)
-    bad = int(comment_time.isna().sum())
-    keep = comment_time.notna() & (comment_time >= start) & (comment_time < end)
-    kept = d.loc[keep].copy()
-    if bad:
-        print(f"  {episode['video_id']}: dropped {bad} comment(s) with missing/unparseable dates")
-    print(f"  {episode['video_id']}: first-{SNAPSHOT_DAYS}-days window kept {len(kept)} of {len(d)} fetched comments")
+    ts = pd.to_datetime(d["date"], errors="coerce", utc=True)
+    if ts.notna().mean() < 0.5:
+        print(f"  {vid}: comment dates missing, {SNAPSHOT_DAYS}-day window NOT applied")
+        return d
+    if len(d) >= SCAN_CAP:
+        # Comments arrive newest-first, so hitting the cap means the earliest comments may not have been reached.
+        print(f"  {vid}: scan cap ({SCAN_CAP}) reached before the first {SNAPSHOT_DAYS} days could be confirmed; "
+              "leaving pending (raise the MAX_SCAN variable)")
+        return None
+    kept = d[ts.notna() & (ts < end)].copy()
+    print(f"  {vid}: kept {len(kept)} of {len(d)} comments (first {SNAPSHOT_DAYS} days only)")
     return kept
 
 
 def ingest(db, episodes, today):
-    if not episodes:
-        return 0
-    raw = fetch(episodes)
     done = 0
     for e in episodes:
-        d = raw[raw["video_id"] == e["video_id"]].copy() if not raw.empty else raw
+        try:
+            d = fetch_one(e)
+        except Exception as ex:   # one bad episode must not block the others (SystemExit still stops the run)
+            if getattr(ex, "reason", "") in QUOTA_REASONS:
+                print("  YouTube quota is used up for today; the remaining episodes will be retried tomorrow")
+                break
+            print(f"  {e['video_id']}: fetch failed ({ex}); will retry on the next run")
+            FAILED.append(e["video_id"])
+            continue
         if d.empty:
             print(f"  {e['video_id']}: no comments returned, leaving pending")
             continue
-        d = first_window_only(d, e)
+        d = windowed(d, e)
+        if d is None:
+            continue
         if d.empty:
-            # The episode has matured past the 7-day mark, so zero qualifying comments
-            # is a valid snapshot rather than a reason to keep retrying forever.
             db.execute("UPDATE episodes SET status='done', n_comments=0, snapshot_at=? WHERE video_id=?",
                        (today.isoformat(), e["video_id"]))
-            print(f"  {e['video_id']}: stored 0 comments in the first-{SNAPSHOT_DAYS}-days window")
+            print(f"  {e['video_id']}: no comments in the first {SNAPSHOT_DAYS} days, marked done with 0 comments")
             done += 1
             continue
+        d = d.copy()
         d["comment"] = d["comment"].fillna("").astype(str)
         d = d[d["comment"].str.len() > 0]
         has_id = "comment_id" in d and d["comment_id"].notna().all()
@@ -143,7 +135,7 @@ def ingest(db, episodes, today):
             lambda t: hashlib.sha1((e["video_id"] + t).encode()).hexdigest())
         d = d.drop_duplicates("comment_key")
         d["guest_aliases"] = e["guest_aliases"]
-        d = a.score(a.tag(d))            # tag + sentiment at ingest, so they survive the text purge
+        d = a.tag(a.score(d))            # score, then tag (Show needs the tone); tag + sentiment at ingest, so they survive the text purge
         d["likes"] = pd.to_numeric(d["likes"], errors="coerce").fillna(0).astype(int)
         rows = [(e["video_id"], r.comment_key, r.comment, int(r.likes), int(bool(r.is_reply)),
                  float(r.compound), r.about, today.isoformat()) for r in d.itertuples()]
@@ -164,6 +156,24 @@ def purge_old_text(db, today):
     if n:
         db.execute("UPDATE comments SET text=NULL WHERE text IS NOT NULL AND fetched_at <= ?", (cutoff,))
     print(f"Purged raw text of {n} comment(s) older than {PURGE_AFTER_DAYS} days")
+
+
+def retag_stored(db):
+    """Persist new tags for comments whose text is still stored (e.g. after adding the Show category or fixing
+    guest aliases), so the tags survive the text purge. Comments whose text is already purged keep their tag."""
+    rows = db.execute("""SELECT c.video_id, c.comment_key, c.text AS comment, c.compound, c.about AS old, e.guest_aliases
+                         FROM comments c JOIN episodes e USING (video_id) WHERE c.text IS NOT NULL""")
+    if not rows:
+        return
+    d = pd.DataFrame(rows)
+    d["old"] = d["old"].astype(str)
+    new = a.tag(d.copy())["about"].values
+    ch = d[new != d["old"].values].copy()
+    ch["about"] = new[new != d["old"].values]
+    if len(ch):
+        db.executemany("UPDATE comments SET about=? WHERE video_id=? AND comment_key=?",
+                       [(r.about, r.video_id, r.comment_key) for r in ch.itertuples()])
+    print(f"Re-tagged {len(ch)} stored comment(s) with text still held")
 
 
 def load_all(db):
@@ -238,6 +248,7 @@ def main():
     todo = due_episodes(db, today)
     print(f"{len(todo)} episode(s) due for a snapshot")
     n_new = ingest(db, todo, today)
+    retag_stored(db)
     purge_old_text(db, today)
 
     if n_new == 0 and not args.force:
@@ -266,7 +277,8 @@ def main():
         with open(f"{args.out}/verdict.txt", "w") as f:
             f.write("\n".join(lines))
 
-    figs = [("who_gets_talked_about", a.chart_dumbbell(e)), ("tone_maria_vs_guest", a.chart_sentiment(df))]
+    figs = [("who_gets_talked_about", a.chart_dumbbell(e)), ("tone_maria_vs_guest", a.chart_sentiment(df)),
+            ("what_comments_are_about", a.chart_mix(df))]
     cum = cumulative(e)
     if not cum.empty:
         cum.to_csv(f"{args.out}/cumulative.csv", index=False)
@@ -282,3 +294,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    if FAILED:
+        raise SystemExit(f"{len(FAILED)} episode(s) could not be fetched and will be retried: {', '.join(FAILED)}")
