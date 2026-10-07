@@ -8,8 +8,7 @@ as each new episode passes its 7-day comment snapshot.
   (`video_url, published, guest, guest_aliases, guest_tier`). Aliases are lowercase, pipe-separated
   (include nicknames). Tier is optional: 1 mega-famous, 2 well known, 3 niche.
 - A daily GitHub Actions run (`.github/workflows/weekly.yml`) looks for episodes that are 7+ days old and
-  not yet processed, fetches their comments once, **keeps only comments posted in the first 7 days after
-  each episode's upload** (so back-catalogue and new episodes are comparable), scores
+  not yet processed, scrapes their comments once (fixed snapshot, so episodes are comparable), scores
   sentiment with VADER, and saves everything to Turso.
 - It then re-tags all stored comments, recomputes the cumulative Maria-minus-guest gap, appends a row to
   `weekly_metrics`, and uploads charts and CSVs as a workflow artifact (kept 90 days).
@@ -27,8 +26,8 @@ as each new episode passes its 7-day comment snapshot.
    (Optional fallback: set the repo variable `COMMENT_SOURCE=apify` and see `scrape_youtube.py`.)
 3. **GitHub repo** (private is fine): push these files, then under Settings > Secrets and variables > Actions add
    - secrets: `YOUTUBE_API_KEY`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`
-   - optional variables: `INCLUDE_REPLIES` (true/false, default false = top-level comments only), `MAX_COMMENTS`
-     (default 5000 per episode), `CHANNEL_ID`, `TITLE_FILTER`
+   - optional variables: `INCLUDE_REPLIES` (true/false, default false = top-level comments only), `MAX_SCAN`
+     (default 30000 comments scanned per episode), `CHANNEL_ID`, `TITLE_FILTER`
    - only if you use the Apify fallback: secret `APIFY_TOKEN`, variables `COMMENT_SOURCE=apify`, `APIFY_ACTOR_ID`
 4. Run it once by hand: Actions tab > pretty-tough-weekly > Run workflow (tick "force" to build charts early).
 
@@ -60,23 +59,49 @@ back-catalogue helper and list-episodes all read only that playlist and ignore `
 deleted videos are skipped. If the playlist also holds clips or trailers, remove them from the playlist on YouTube
 (if you manage it) or delete those rows from `episodes.csv`.
 
+## Turning the playlist list into episodes.csv (no Python needed)
+`uploads.csv` is just a listing (`published, video_id, title, url, matches_filter`); it is not the file the pipeline reads.
+Each list-episodes run also attaches `episodes_draft.csv`, already in the `episodes.csv` shape
+(`video_url, published, guest, guest_aliases, guest_tier`, oldest episode first). Download it from the run's
+artifact, open it in Excel or Google Sheets, and fill in `guest` (name), `guest_aliases` (lowercase, pipe-separated,
+e.g. `christina|tosi`, include nicknames) and optionally `guest_tier` (1 mega-famous, 2 well known, 3 niche) for every
+row. Use the `title_for_reference` column to see who the guest is. It can stay in the file (the pipeline ignores it).
+Save it as `episodes.csv`, replacing the empty one in the repo, and commit. The pipeline stops with a clear message if
+any row still has a blank guest or aliases.
+
 ## Back catalogue (backfill_episodes.py)
 To load past episodes: `export YOUTUBE_API_KEY=...` then `python backfill_episodes.py --from 2026-01-01`.
 It writes `episodes_draft.csv` (matching uploads not yet in `episodes.csv`, guests guessed from titles).
 Review it, drop the `title_for_reference` column, and append the rows to `episodes.csv`. To stop the watcher
 alerting about older uploads, set the repo variable `WATCH_FROM_DATE` (YYYY-MM-DD) to your start date.
-Older episodes may be fetched months later, but the pipeline filters by each comment's timestamp and keeps
-only the first 7 days after that episode's upload. They can therefore be included in the same comparison as
-new episodes without giving the back catalogue a longer time to accumulate comments.
+Older episodes are fine to include: the pipeline counts only comments posted in each episode's first 7 days
+(see "Comment window" below), so they are measured the same way as new ones.
 
 ## Weekly routine
 1. When the GitHub issue arrives, paste its row into `episodes.csv` (fix guest and aliases) and commit.
 2. About a week after upload the daily run processes it. Download the artifact, then use the PNGs
    and `verdict.txt` in your Substack post.
 
+## Comment window (what counts)
+For every episode only comments posted in its first 7 days count: the upload day plus the next six, in UTC.
+An episode becomes eligible once it is 7 days old, so new episodes have a complete window and old episodes
+(including the back catalogue) are cut to the same window. Comments after that are fetched but ignored.
+YouTube lists comments newest-first, so the pipeline has to scan back to reach an old episode's first week. It scans up
+to `MAX_SCAN` comments per episode (default 30000, about 300 quota units). If an episode has more comments than that,
+it is left pending with a message in the log instead of being counted with an incomplete window; raise `MAX_SCAN` to
+include it. An unexpected fetch error on one episode does not stop the others; the run is marked failed at the end
+and the episode is retried next time. If the daily quota runs out, the rest are retried the next day.
+Note: replies are excluded by default (`INCLUDE_REPLIES`), so the window applies to top-level comments.
+
 ## Data retention (YouTube's 30-day rule)
 YouTube's developer policies allow storing public comment data for at most 30 calendar days. So:
-- Each comment is tagged (Maria / Guest / Both / Neither) and sentiment-scored when it is fetched.
+- Each comment is sentiment-scored, then tagged when it is fetched: **Maria**, **Guest**, **Both**, **Show**, or **Neither**.
+  **Show** = names neither Maria nor the guest, mentions the show/episode (words like podcast, episode, interview,
+  conversation, questions, listening; list is `SHOW_WORDS` in `analyze_youtube.py`) and has a clear positive or negative
+  tone (VADER |compound| >= 0.05, `SHOW_MIN`). It is keyword-based, so it is approximate; edit the two constants to tune it.
+- Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
+  the last 28 days; comments whose text is already purged keep the tag they had.
+- New chart `what_comments_are_about.png`: stacked share of Maria / guest / both / show / neither per episode.
 - Raw comment text is deleted from Turso 28 days after fetching. Tags, scores, like counts and all
   statistics are kept permanently, so charts and the cumulative result are unaffected.
 - Alias fixes in `episodes.csv` re-tag only comments whose text is still stored (the first 28 days).
