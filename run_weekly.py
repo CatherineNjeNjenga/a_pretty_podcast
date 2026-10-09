@@ -139,10 +139,11 @@ def ingest(db, episodes, today):
         d = a.tag(a.score(d))            # score, then tag (Show needs the tone); tag + sentiment at ingest, so they survive the text purge
         d["likes"] = pd.to_numeric(d["likes"], errors="coerce").fillna(0).astype(int)
         rows = [(e["video_id"], r.comment_key, r.comment, int(r.likes), int(bool(r.is_reply)),
-                 float(r.compound), r.about, today.isoformat(), classify.RULES_VERSION) for r in d.itertuples()]
+                 float(r.compound), r.about, today.isoformat(), classify.RULES_VERSION,
+                 r.focus if isinstance(r.focus, str) else None) for r in d.itertuples()]
         db.executemany("INSERT OR IGNORE INTO comments "
-                       "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at, rules_version) "
-                       "VALUES (?,?,?,?,?,?,?,?,?)", rows)
+                       "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at, rules_version, focus) "
+                       "VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
         db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=? WHERE video_id=?",
                    (len(rows), today.isoformat(), e["video_id"]))
         print(f"  {e['video_id']}: stored {len(rows)} comments")
@@ -160,37 +161,41 @@ def purge_old_text(db, today):
 
 
 def retag_stored(db):
-    """Re-tag comments whose text is still stored (so rule or alias changes apply) and stamp them with the current
-    rules version. Comments whose text is already purged keep the tag and version they had."""
+    """Re-tag comments whose text is still stored (so rule or alias changes apply), refresh their Both-focus and stamp
+    them with the current rules version. Comments whose text is already purged keep the tag, focus and version they had."""
     rows = db.execute("""SELECT c.video_id, c.comment_key, c.text AS comment, c.compound, c.about AS old,
-                                c.rules_version AS ver, e.guest_aliases
+                                c.focus AS oldfocus, c.rules_version AS ver, e.guest_aliases
                          FROM comments c JOIN episodes e USING (video_id) WHERE c.text IS NOT NULL""")
     if not rows:
         return
     d = pd.DataFrame(rows)
     d["old"] = d["old"].astype(str)
-    d["new"] = a.tag(d.copy())["about"].values
-    todo = d[(d["new"] != d["old"]) | (d["ver"] != classify.RULES_VERSION)]
+    d["oldfocus"] = d["oldfocus"].fillna("").astype(str)
+    t = a.tag(d.copy())
+    d["new"], d["newfocus"] = t["about"].values, pd.Series(t["focus"].values).fillna("").astype(str).values
+    todo = d[(d["new"] != d["old"]) | (d["newfocus"] != d["oldfocus"]) | (d["ver"] != classify.RULES_VERSION)]
     if len(todo):
-        db.executemany("UPDATE comments SET about=?, rules_version=? WHERE video_id=? AND comment_key=?",
-                       [(r.new, classify.RULES_VERSION, r.video_id, r.comment_key) for r in todo.itertuples()])
+        db.executemany("UPDATE comments SET about=?, focus=?, rules_version=? WHERE video_id=? AND comment_key=?",
+                       [(r.new, r.newfocus or None, classify.RULES_VERSION, r.video_id, r.comment_key)
+                        for r in todo.itertuples()])
     print(f"Re-tagged {int((d['new'] != d['old']).sum())} stored comment(s) with text still held "
           f"(rules {classify.RULES_VERSION}); {len(todo)} stamped with this version")
 
 
 def load_all(db):
     c = pd.DataFrame(db.execute(
-        """SELECT c.video_id, c.text AS comment, c.likes, c.is_reply, c.compound, c.about AS stored_about, c.rules_version,
+        """SELECT c.video_id, c.text AS comment, c.likes, c.is_reply, c.compound, c.about AS stored_about, c.focus AS stored_focus, c.rules_version,
                   e.guest, e.guest_aliases, e.guest_tier, e.published
            FROM comments c JOIN episodes e USING (video_id) WHERE e.status='done'"""))
     if c.empty:
         return c
     c["guest_tier"] = pd.to_numeric(c["guest_tier"], errors="coerce")
     has_text = c["comment"].notna()
-    c["about"] = c["stored_about"]
+    c["about"], c["focus"] = c["stored_about"], c["stored_focus"]
     if has_text.any():   # alias fixes re-tag comments whose text is still within the retention window
-        c.loc[has_text, "about"] = a.tag(c[has_text].copy())["about"].values
-    return c.drop(columns=["stored_about"])
+        t = a.tag(c[has_text].copy())
+        c.loc[has_text, "about"], c.loc[has_text, "focus"] = t["about"].values, t["focus"].values
+    return c.drop(columns=["stored_about", "stored_focus"])
 
 
 def cumulative(e, min_k=3):
@@ -275,7 +280,7 @@ def main():
               "(see rules_versions in episode_summary.csv).")
     os.makedirs(args.out, exist_ok=True)
     # Exports contain no comment text and no usernames: only derived fields.
-    df[["video_id", "guest", "published", "likes", "is_reply", "about", "compound", "rules_version"]].to_csv(
+    df[["video_id", "guest", "published", "likes", "is_reply", "about", "focus", "compound", "rules_version"]].to_csv(
         f"{args.out}/tagged_comments.csv", index=False)
     e.to_csv(f"{args.out}/episode_summary.csv", index=False)
 
