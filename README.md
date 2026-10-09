@@ -108,6 +108,11 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
 - Every stored comment carries a `rules_version` (set in `classify.py`; bump it whenever you change a rule or word list).
   Comments tagged before versioning show as "pre-versioning". `episode_summary.csv` has a `rules_versions` column and the run
   log warns when tags come from more than one version, so compare episodes tagged under the same rules.
+- **Both focus.** A Both comment (names Maria and the guest) also gets a `focus`: Maria, Guest or Joint, from a rough rule fitted
+  to 34 hand-labelled comments (about 74% agreement, optimistic because it was tuned on them). It does not change the tag.
+  The main gap counts Both toward both sides, which cancels out of the gap (same as leaving Both out). The extra
+  "sensitivity" line in the verdict assigns focused Both comments to the side they favour (`gap_focus`); if the two agree,
+  the result does not depend on how Both is handled.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
