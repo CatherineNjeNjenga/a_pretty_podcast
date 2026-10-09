@@ -73,7 +73,7 @@ REACT_RX = re.compile(
 
 # Bump this whenever a rule, word list or alias logic below changes in a way that can change a tag. It is stored with
 # every comment so you can tell which rules produced each tag (older comments whose text is purged keep their old version).
-RULES_VERSION = "2026-10-09.1"
+RULES_VERSION = "2026-10-09.2"
 
 CATEGORIES = ["Maria", "Guest", "Both", "Show", "Request", "Pair", "Unnamed", "Reaction", "Topic", "Noise", "Neither"]
 
@@ -113,3 +113,33 @@ def classify(df):
     """df needs columns: video_id, guest_aliases (pipe-separated), comment. Returns a numpy array of categories."""
     rx = {v: alias_regex(a) for v, a in df.drop_duplicates("video_id")[["video_id", "guest_aliases"]].values}
     return np.array([_one(t, rx[v]) for v, t in zip(df["video_id"], df["comment"])])
+
+
+# --- Focus of a "Both" comment -------------------------------------------------------------------------------
+# A Both comment names Maria and the guest, but is often really about one of them ("Maria, great questions... with Zoe").
+# Rough rule fitted to 34 hand-labelled Both comments (74% agreement; optimistic because it was tuned on them):
+#   Guest : the guest is named more often than Maria and "she/her" appears 3+ times
+#   Maria : 100+ words and either 3+ host words (interview, questions, host...) or the guest is not named more than Maria
+#   Joint : everything else (mostly short "thanks Maria, great chat with X" comments)
+HOST_RX = re.compile(r"\b(host|hosting|interviewer|interview|questions?|guided|asked|asking|listen\w*|podcast|episode|subscri\w+|series)\b")
+SHE_RX = re.compile(r"\b(she|her|hers)\b")
+
+
+def _focus_one(text, grx, about):
+    if about != "Both":
+        return None
+    v = variants(text)[0]
+    m = len(MARIA_RX.findall(v))
+    g = len(grx.findall(v)) if grx else 0
+    she, host, words = len(SHE_RX.findall(v)), len(HOST_RX.findall(v)), len(v.split())
+    if g >= m + 1 and she >= 3:
+        return "Guest"
+    if words >= 100 and (host >= 3 or g <= m):
+        return "Maria"
+    return "Joint"
+
+
+def focus_all(df, about):
+    """Focus (Maria / Guest / Joint) for Both comments, None for everything else."""
+    rx = {v: alias_regex(a) for v, a in df.drop_duplicates("video_id")[["video_id", "guest_aliases"]].values}
+    return np.array([_focus_one(t, rx[v], ab) for v, t, ab in zip(df["video_id"], df["comment"], about)], dtype=object)
