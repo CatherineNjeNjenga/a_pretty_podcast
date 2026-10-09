@@ -95,13 +95,23 @@ Note: replies are excluded by default (`INCLUDE_REPLIES`), so the window applies
 
 ## Data retention (YouTube's 30-day rule)
 YouTube's developer policies allow storing public comment data for at most 30 calendar days. So:
-- Each comment is sentiment-scored, then tagged when it is fetched: **Maria**, **Guest**, **Both**, **Show**, or **Neither**.
-  **Show** = names neither Maria nor the guest, mentions the show/episode (words like podcast, episode, interview,
-  conversation, questions, listening; list is `SHOW_WORDS` in `analyze_youtube.py`) and has a clear positive or negative
-  tone (VADER |compound| >= 0.05, `SHOW_MIN`). It is keyword-based, so it is approximate; edit the two constants to tune it.
+- Each comment is tagged by `classify.py` (first match wins): **Noise** (link only, timestamps, "1st/top", self-promotion),
+  **Request** (asks for a guest, English and Russian; wins over any name, so "Мария, пригласи X" is not counted as
+  engagement with Maria), **Maria / Guest / Both** (names, including Russian and Chinese spellings, accents and stretched
+  letters like "Lindseeeyyy"), **Show** (judges the show or episode), **Pair** (about both hosts, no names: "two queens"),
+  **Unnamed** (she/her or a role like presenter, no name), **Reaction** (emoji-only or a short feeling like "Congratulations!"),
+  **Topic** (readable comment about the subject, 5+ words) and **Neither** (the rest).
+- Only Maria, Guest and Both enter the Maria-vs-guest gap. The tone score is not used for tagging (it scores 0 on emoji,
+  Russian and short comments); it is still stored for Show and tone charts.
+- On your 187-comment labelled sample the rules agree with your labels on about 83% (lenient mapping: your Topic may
+  come out as Unnamed or Neither, your Show as Pair). Tune the word lists at the top of `classify.py`.
+- Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
-- New chart `what_comments_are_about.png`: stacked share of Maria / guest / both / show / neither per episode.
+- `python sample_neither.py` (or the "sample-neither-comments" workflow) writes a random sample of one category's
+  leftovers to a short-lived CSV for review.
+- Charts: `what_comments_are_about.png` (per-episode split: Maria, guest, both, show, everything else) and
+  `comment_categories.png` (all categories, one bar each).
 - Raw comment text is deleted from Turso 28 days after fetching. Tags, scores, like counts and all
   statistics are kept permanently, so charts and the cumulative result are unaffected.
 - Alias fixes in `episodes.csv` re-tag only comments whose text is still stored (the first 28 days).
