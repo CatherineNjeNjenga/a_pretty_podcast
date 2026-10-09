@@ -278,7 +278,8 @@ def main():
             f.write("\n".join(lines))
 
     figs = [("who_gets_talked_about", a.chart_dumbbell(e)), ("tone_maria_vs_guest", a.chart_sentiment(df)),
-            ("what_comments_are_about", a.chart_mix(df))]
+            ("what_comments_are_about", a.chart_mix(df)),
+            ("comment_categories", a.chart_categories(df))]
     cum = cumulative(e)
     if not cum.empty:
         cum.to_csv(f"{args.out}/cumulative.csv", index=False)
