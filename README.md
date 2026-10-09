@@ -108,8 +108,8 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
-- `python sample_neither.py` (or the "sample-neither-comments" workflow) writes a random sample of one category's
-  leftovers to a short-lived CSV for review.
+- `python sample_neither.py --about Both` (or the "sample-comments" workflow, which has a category dropdown) writes a random
+  sample of one category to a short-lived CSV (`comment_sample.csv`) for review and labelling.
 - Charts: `what_comments_are_about.png` (per-episode split: Maria, guest, both, show, everything else) and
   `comment_categories.png` (all categories, one bar each).
 - Raw comment text is deleted from Turso 28 days after fetching. Tags, scores, like counts and all
