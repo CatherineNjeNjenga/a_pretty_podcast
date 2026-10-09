@@ -105,6 +105,9 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   Russian and short comments); it is still stored for Show and tone charts.
 - On your 187-comment labelled sample the rules agree with your labels on about 83% (lenient mapping: your Topic may
   come out as Unnamed or Neither, your Show as Pair). Tune the word lists at the top of `classify.py`.
+- Every stored comment carries a `rules_version` (set in `classify.py`; bump it whenever you change a rule or word list).
+  Comments tagged before versioning show as "pre-versioning". `episode_summary.csv` has a `rules_versions` column and the run
+  log warns when tags come from more than one version, so compare episodes tagged under the same rules.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
