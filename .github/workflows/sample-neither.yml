@@ -1,10 +1,15 @@
-name: sample-neither-comments
+name: sample-comments
 
 on:
   workflow_dispatch:
     inputs:
+      about:
+        description: "Which category to sample"
+        type: choice
+        default: "Both"
+        options: [Both, Neither, Maria, Guest, Show, Request, Pair, Unnamed, Reaction, Topic, Noise]
       n:
-        description: "How many Neither comments to sample"
+        description: "How many comments to sample"
         default: "150"
 
 permissions:
@@ -26,9 +31,10 @@ jobs:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           N: ${{ inputs.n }}
-        run: python sample_neither.py --n "$N"
+          ABOUT: ${{ inputs.about }}
+        run: python sample_neither.py --about "$ABOUT" --n "$N"
       - uses: actions/upload-artifact@v4
         with:
-          name: neither-sample
-          path: neither_sample.csv
+          name: comment-sample
+          path: comment_sample.csv
           retention-days: 1
