@@ -28,6 +28,7 @@ import plotly.graph_objects as go
 
 import store
 import analyze_youtube as a
+import classify
 
 SNAPSHOT_DAYS = 7
 PURGE_AFTER_DAYS = 28     # margin under the 30-day limit
@@ -138,10 +139,10 @@ def ingest(db, episodes, today):
         d = a.tag(a.score(d))            # score, then tag (Show needs the tone); tag + sentiment at ingest, so they survive the text purge
         d["likes"] = pd.to_numeric(d["likes"], errors="coerce").fillna(0).astype(int)
         rows = [(e["video_id"], r.comment_key, r.comment, int(r.likes), int(bool(r.is_reply)),
-                 float(r.compound), r.about, today.isoformat()) for r in d.itertuples()]
+                 float(r.compound), r.about, today.isoformat(), classify.RULES_VERSION) for r in d.itertuples()]
         db.executemany("INSERT OR IGNORE INTO comments "
-                       "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at) "
-                       "VALUES (?,?,?,?,?,?,?,?)", rows)
+                       "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at, rules_version) "
+                       "VALUES (?,?,?,?,?,?,?,?,?)", rows)
         db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=? WHERE video_id=?",
                    (len(rows), today.isoformat(), e["video_id"]))
         print(f"  {e['video_id']}: stored {len(rows)} comments")
@@ -159,26 +160,27 @@ def purge_old_text(db, today):
 
 
 def retag_stored(db):
-    """Persist new tags for comments whose text is still stored (e.g. after adding the Show category or fixing
-    guest aliases), so the tags survive the text purge. Comments whose text is already purged keep their tag."""
-    rows = db.execute("""SELECT c.video_id, c.comment_key, c.text AS comment, c.compound, c.about AS old, e.guest_aliases
+    """Re-tag comments whose text is still stored (so rule or alias changes apply) and stamp them with the current
+    rules version. Comments whose text is already purged keep the tag and version they had."""
+    rows = db.execute("""SELECT c.video_id, c.comment_key, c.text AS comment, c.compound, c.about AS old,
+                                c.rules_version AS ver, e.guest_aliases
                          FROM comments c JOIN episodes e USING (video_id) WHERE c.text IS NOT NULL""")
     if not rows:
         return
     d = pd.DataFrame(rows)
     d["old"] = d["old"].astype(str)
-    new = a.tag(d.copy())["about"].values
-    ch = d[new != d["old"].values].copy()
-    ch["about"] = new[new != d["old"].values]
-    if len(ch):
-        db.executemany("UPDATE comments SET about=? WHERE video_id=? AND comment_key=?",
-                       [(r.about, r.video_id, r.comment_key) for r in ch.itertuples()])
-    print(f"Re-tagged {len(ch)} stored comment(s) with text still held")
+    d["new"] = a.tag(d.copy())["about"].values
+    todo = d[(d["new"] != d["old"]) | (d["ver"] != classify.RULES_VERSION)]
+    if len(todo):
+        db.executemany("UPDATE comments SET about=?, rules_version=? WHERE video_id=? AND comment_key=?",
+                       [(r.new, classify.RULES_VERSION, r.video_id, r.comment_key) for r in todo.itertuples()])
+    print(f"Re-tagged {int((d['new'] != d['old']).sum())} stored comment(s) with text still held "
+          f"(rules {classify.RULES_VERSION}); {len(todo)} stamped with this version")
 
 
 def load_all(db):
     c = pd.DataFrame(db.execute(
-        """SELECT c.video_id, c.text AS comment, c.likes, c.is_reply, c.compound, c.about AS stored_about,
+        """SELECT c.video_id, c.text AS comment, c.likes, c.is_reply, c.compound, c.about AS stored_about, c.rules_version,
                   e.guest, e.guest_aliases, e.guest_tier, e.published
            FROM comments c JOIN episodes e USING (video_id) WHERE e.status='done'"""))
     if c.empty:
@@ -263,9 +265,17 @@ def main():
         return
     e = a.per_episode(df).merge(
         df.drop_duplicates("video_id")[["video_id", "published"]], on="video_id")
+    ver = df.assign(rules_version=df["rules_version"].fillna("pre-versioning")).groupby("video_id")["rules_version"].agg(
+        lambda x: ", ".join(sorted(x.unique())))
+    e["rules_versions"] = e["video_id"].map(ver)
+    counts = df["rules_version"].fillna("pre-versioning").value_counts()
+    print("Comments by rules version:", counts.to_dict())
+    if len(counts) > 1:
+        print("WARNING: tags come from more than one rules version; compare episodes with the same version "
+              "(see rules_versions in episode_summary.csv).")
     os.makedirs(args.out, exist_ok=True)
     # Exports contain no comment text and no usernames: only derived fields.
-    df[["video_id", "guest", "published", "likes", "is_reply", "about", "compound"]].to_csv(
+    df[["video_id", "guest", "published", "likes", "is_reply", "about", "compound", "rules_version"]].to_csv(
         f"{args.out}/tagged_comments.csv", index=False)
     e.to_csv(f"{args.out}/episode_summary.csv", index=False)
 
