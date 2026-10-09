@@ -71,6 +71,10 @@ REACT_RX = re.compile(
     r"\u043f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\w*|\u0441\u0443\u043f\u0435\u0440|\u043a\u043b\u0430\u0441\u0441|\u043a\u0440\u0443\u0442\u043e|\u043c\u043e\u043b\u043e\u0434\u0435\u0446|"
     r"\u0441\u043f\u0430\u0441\u0438\u0431\u043e|\u043b\u044e\u0431\u043b\u044e|\u043e\u0431\u043e\u0436\u0430\u044e|\u043a\u0440\u0430\u0441\u0438\u0432\w*")
 
+# Bump this whenever a rule, word list or alias logic below changes in a way that can change a tag. It is stored with
+# every comment so you can tell which rules produced each tag (older comments whose text is purged keep their old version).
+RULES_VERSION = "2026-10-09.1"
+
 CATEGORIES = ["Maria", "Guest", "Both", "Show", "Request", "Pair", "Unnamed", "Reaction", "Topic", "Noise", "Neither"]
 
 
