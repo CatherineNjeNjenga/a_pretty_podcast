@@ -15,7 +15,7 @@ SCHEMA = [
         n_comments INTEGER, snapshot_at TEXT)""",
     """CREATE TABLE IF NOT EXISTS comments (
         video_id TEXT, comment_key TEXT, text TEXT, likes INTEGER, is_reply INTEGER,
-        compound REAL, about TEXT, fetched_at TEXT, PRIMARY KEY (video_id, comment_key))""",
+        compound REAL, about TEXT, fetched_at TEXT, rules_version TEXT, PRIMARY KEY (video_id, comment_key))""",
     """CREATE TABLE IF NOT EXISTS weekly_metrics (
         run_date TEXT PRIMARY KEY, n_episodes INTEGER, mean_gap_all REAL, ci_lo REAL,
         ci_hi REAL, mean_gap_likes REAL, sign_p REAL, maria_ahead INTEGER)""",
@@ -102,5 +102,17 @@ def connect():
         db, where = LocalSQLite(os.environ.get("LOCAL_DB", "pretty_tough.db")), "local SQLite (no Turso env vars set)"
     for stmt in SCHEMA:
         db.execute(stmt)
+    # Databases created before rules_version existed: add the column (old rows stay NULL = "pre-versioning").
+    try:
+        has = "rules_version" in [r["name"] for r in db.execute("PRAGMA table_info(comments)")]
+    except Exception:
+        has = False   # PRAGMA not answered: fall through, a duplicate-column error below means it already exists
+    if not has:
+        try:
+            db.execute("ALTER TABLE comments ADD COLUMN rules_version TEXT")
+            print("Added comments.rules_version column")
+        except Exception as ex:
+            if "duplicate column" not in str(ex).lower():
+                raise
     print("Storage:", where)
     return db
