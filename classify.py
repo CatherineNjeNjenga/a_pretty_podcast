@@ -25,6 +25,8 @@ import unicodedata
 
 import numpy as np
 
+BUILD = "2026-10-10.5"   # bumped with every release; run_weekly.py checks that all the files below carry the same value
+
 
 def _strip(t):
     t = unicodedata.normalize("NFKD", t)
@@ -63,6 +65,22 @@ ALSO = {"nobel peace price": ["nobel peace prize"], "j crew": ["jcrew", "j.crew"
 _WORK = None
 
 
+def _csv_rows(path):
+    """Rows of a small hand-edited CSV. Tries UTF-8 then Windows-1252 (what Excel's plain "CSV" save uses). A file that cannot be read
+    at all is reported in the log and treated as empty, so a bad edit never stops the weekly run."""
+    for enc in ("utf-8-sig", "cp1252"):
+        try:
+            with open(path, encoding=enc, newline="") as f:
+                return list(csv.DictReader(f))
+        except UnicodeDecodeError:
+            continue
+        except Exception as ex:
+            print(f"WARNING: could not read {os.path.basename(path)} ({ex}); ignoring it this run")
+            return []
+    print(f"WARNING: could not decode {os.path.basename(path)}; ignoring it this run (save it as CSV UTF-8)")
+    return []
+
+
 def _term_rx(term):
     forms = [term] + ALSO.get(_strip(term).strip(), [])
     return re.compile(r"(?<!\w)(" + "|".join(re.escape(_strip(f).strip()) for f in forms) + r")(?!\w)")
@@ -76,7 +94,7 @@ def work_terms(path=None):
     out = {"maria": [], "guests": {}}
     p = path or WORK_FILE
     if os.path.exists(p):
-        for r in csv.DictReader(open(p, encoding="utf-8-sig")):
+        for r in _csv_rows(p):
             term = (r.get("term") or "").strip()
             if not term or (r.get("on") or "yes").strip().lower() != "yes":
                 continue
@@ -301,7 +319,7 @@ def name_aliases():
     """{name key: official name} from name_aliases.csv (columns variant,name), e.g. a Russian spelling -> the English name."""
     out = {}
     if os.path.exists(NAME_ALIAS_FILE):
-        for r in csv.DictReader(open(NAME_ALIAS_FILE, encoding="utf-8-sig")):
+        for r in _csv_rows(NAME_ALIAS_FILE):
             if (r.get("variant") or "").strip() and (r.get("name") or "").strip():
                 out[_name_key(r["variant"])] = r["name"].strip()
     return out
