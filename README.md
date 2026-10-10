@@ -204,3 +204,16 @@ To switch it on (once):
 
 Until `PUBLISH_SITE` is `true`, nothing is published. The page is public to anyone with the link (and on a free GitHub plan Pages needs a public
 repository), so read the page once before sharing it. Try it locally with `python build_site.py` after a run.
+
+
+## Backups
+Turso holds the only copy of your derived data (the raw comment text is deleted after 28 days on purpose), so keep your own backup.
+The **pretty-tough-backup** workflow runs on the 1st of every month (and on demand: Actions > pretty-tough-backup > Run workflow) and
+runs `backup_export.py`, which writes `episodes.csv`, `comments.csv`, `weekly_metrics.csv` and `manifest.json` (row counts and rules
+versions). Raw comment text is never exported, and YouTube comment ids are replaced by a one-way hash. The files appear as an
+artifact called `pretty-tough-backup-<run id>` at the bottom of the run's page.
+
+GitHub deletes artifacts after 90 days, so **download one now and then and keep it somewhere of your own** (for example a folder
+on your computer or cloud drive). To restore into an empty database: point `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` at it and run
+`python restore_backup.py --from <backup folder>`. It refuses to touch a database that already has episodes unless you pass `--force`.
+Restored comments have no text; their tags, scores and likes are back, and finished episodes are not fetched again.
