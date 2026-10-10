@@ -5,6 +5,8 @@ Categories (first match wins, in this order):
   Request   asks for a guest or collaboration (English + Russian) - wins over any name in the comment,
             so "Мария, пригласи X" is NOT counted as engagement with Maria
   Maria / Guest / Both   names her (Latin, Cyrillic, Chinese) / the guest (aliases) / both
+  Work      no name, but mentions Maria's or the guest's business/book/organisation (work_terms.csv), e.g. "Sugarpova", "Lakers";
+            which side it belongs to is stored in the separate `work` flag. Never counted in the gap or in Both.
   Show      judges the show or episode (cue words, or praise aimed at "this")
   Pair      about both hosts without names ("two queens", "great chemistry")
   Unnamed   she/her or a role (host, presenter, interviewer) with no name - reported separately, never in the gap
@@ -15,6 +17,8 @@ Categories (first match wins, in this order):
 Matching is done on normalised text: accents removed, lower case, stretched letters collapsed
 ("Lindseeeeeeyyyy" -> "lindsey"), and "#MariaSharapova" still matches (sharapova is matched inside longer words). Nothing here uses the tone score.
 """
+import csv
+import os
 import re
 import unicodedata
 
@@ -43,6 +47,67 @@ def alias_regex(aliases):
 
 def _any(rx, vs):
     return any(rx.search(v) for v in vs)
+
+# --- Work terms (work_terms.csv) -------------------------------------------------------------------------------
+# scope,guest,term,kind,risky,on,note.  Rows with on=no are ignored.
+#  * kind=topic rows (scope maria) are the separate topic list (doping): they set the `topic` flag, never the tag.
+#  * every other row is a Work term: it sets the `work` flag (Maria / Guest / Both) on ANY comment containing it, and a
+#    comment with no name in it gets the tag "Work" instead of falling through to Show/Topic/Neither.
+#  * risky=yes means the word is also ordinary chatter ("lakers", "wta", "vogue"): it only sets the flag when the comment also
+#    names Maria or the guest, and never creates the "Work" tag on its own. Topic terms that are risky need the comment to be
+#    tagged Maria or Both (i.e. about her).
+#  * guest-scope terms apply only in that guest's own episode.
+WORK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work_terms.csv")
+ALSO = {"nobel peace price": ["nobel peace prize"], "j crew": ["jcrew", "j.crew"], "gabriela hearst": ["gabi hearst"]}
+_WORK = None
+
+
+def _term_rx(term):
+    forms = [term] + ALSO.get(_strip(term).strip(), [])
+    return re.compile(r"(?<!\w)(" + "|".join(re.escape(_strip(f).strip()) for f in forms) + r")(?!\w)")
+
+
+def work_terms(path=None):
+    """{'maria': [(rx, risky, kind)], 'guests': {guest_key: [(rx, risky, kind)]}} from work_terms.csv (cached)."""
+    global _WORK
+    if _WORK is not None and path is None:
+        return _WORK
+    out = {"maria": [], "guests": {}}
+    p = path or WORK_FILE
+    if os.path.exists(p):
+        for r in csv.DictReader(open(p, encoding="utf-8-sig")):
+            term = (r.get("term") or "").strip()
+            if not term or (r.get("on") or "yes").strip().lower() != "yes":
+                continue
+            item = (_term_rx(term), (r.get("risky") or "").strip().lower() == "yes", (r.get("kind") or "").strip().lower())
+            if (r.get("scope") or "").strip().lower() == "maria":
+                out["maria"].append(item)
+            else:
+                out["guests"].setdefault(_strip(r.get("guest") or "").strip(), []).append(item)
+    if path is None:
+        _WORK = out
+    return out
+
+
+def _work_flags(vs, about, guest_key):
+    """(work side or None, True if a non-risky Work term matched, topic flag or None)."""
+    wt = work_terms()
+    named = about in ("Maria", "Guest", "Both") or None
+    sides, safe, topic = set(), False, None
+    for side, items in (("Maria", wt["maria"]), ("Guest", wt["guests"].get(guest_key, []))):
+        for rx, risky, kind in items:
+            if not _any(rx, vs):
+                continue
+            if kind == "topic":
+                if side == "Maria" and (not risky or about in ("Maria", "Both")):
+                    topic = "doping"
+                continue
+            if risky and not named:
+                continue
+            sides.add(side)
+            safe = safe or not risky
+    work = None if not sides else ("Both" if len(sides) == 2 else sides.pop())
+    return work, safe, topic
 
 
 URL_RX = re.compile(r"https?://\S+|www\.\S+|\byoutu\.be/\S+|\S+\.(com|ru|net)/\S*")
@@ -73,12 +138,12 @@ REACT_RX = re.compile(
 
 # Bump this whenever a rule, word list or alias logic below changes in a way that can change a tag. It is stored with
 # every comment so you can tell which rules produced each tag (older comments whose text is purged keep their old version).
-RULES_VERSION = "2026-10-09.2"
+RULES_VERSION = "2026-10-10.1"
 
-CATEGORIES = ["Maria", "Guest", "Both", "Show", "Request", "Pair", "Unnamed", "Reaction", "Topic", "Noise", "Neither"]
+CATEGORIES = ["Maria", "Guest", "Both", "Work", "Show", "Request", "Pair", "Unnamed", "Reaction", "Topic", "Noise", "Neither"]
 
 
-def _one(text, grx):
+def _one(text, grx, gkey=""):
     vs = variants(text)
     stripped = URL_RX.sub(" ", vs[0])
     words = re.findall(r"\w+", stripped)
@@ -98,6 +163,8 @@ def _one(text, grx):
         return "Maria"
     if g:
         return "Guest"
+    if _work_flags(vs, "", gkey)[1]:
+        return "Work"
     if _any(SHOW_RX, vs):
         return "Show"
     if _any(PAIR_RX, vs):
@@ -109,10 +176,28 @@ def _one(text, grx):
     return "Topic" if len(words) >= 5 else "Neither"
 
 
+def _meta(df):
+    cols = ["video_id", "guest_aliases"] + (["guest"] if "guest" in df else [])
+    d = df.drop_duplicates("video_id")[cols]
+    rx = {r.video_id: alias_regex(r.guest_aliases) for r in d.itertuples()}
+    gk = {r.video_id: _strip(r.guest).strip() if "guest" in df and isinstance(r.guest, str) else "" for r in d.itertuples()}
+    return rx, gk
+
+
 def classify(df):
-    """df needs columns: video_id, guest_aliases (pipe-separated), comment. Returns a numpy array of categories."""
-    rx = {v: alias_regex(a) for v, a in df.drop_duplicates("video_id")[["video_id", "guest_aliases"]].values}
-    return np.array([_one(t, rx[v]) for v, t in zip(df["video_id"], df["comment"])])
+    """df needs columns: video_id, guest_aliases (pipe-separated), comment (and guest, for Work terms). Returns an array of categories."""
+    rx, gk = _meta(df)
+    return np.array([_one(t, rx[v], gk[v]) for v, t in zip(df["video_id"], df["comment"])])
+
+
+def flags_all(df, about):
+    """(work, topic) arrays: work = Maria / Guest / Both / None, topic = 'doping' / None. Neither changes the tag except Work-only."""
+    rx, gk = _meta(df)
+    w, tp = [], []
+    for v, t, ab in zip(df["video_id"], df["comment"], about):
+        a, _, b = _work_flags(variants(t), ab, gk[v])
+        w.append(a); tp.append(b)
+    return np.array(w, dtype=object), np.array(tp, dtype=object)
 
 
 # --- Focus of a "Both" comment -------------------------------------------------------------------------------
