@@ -30,6 +30,7 @@ import plotly.graph_objects as go
 import store
 import analyze_youtube as a
 import classify
+import youtube_api
 
 SNAPSHOT_DAYS = 7
 PURGE_AFTER_DAYS = 28     # margin under the 30-day limit
@@ -400,6 +401,21 @@ def set_output(name, value):
             f.write(f"{name}={value}\n")
 
 
+BUILD = "2026-10-10.5"
+
+
+def check_build():
+    """Stop with a plain message if the repository mixes files from different releases (for example a new run_weekly.py with an old
+    analyze_youtube.py), which otherwise shows up as a confusing KeyError halfway through the run."""
+    bad = [f"{name} ({getattr(mod, 'BUILD', 'no BUILD marker, so an old copy')})"
+           for name, mod in (("classify.py", classify), ("analyze_youtube.py", a), ("store.py", store), ("youtube_api.py", youtube_api))
+           if getattr(mod, "BUILD", None) != BUILD]
+    if bad:
+        raise SystemExit(f"Files from different releases: run_weekly.py is build {BUILD} but " + ", ".join(bad) +
+                         ". Copy ALL the .py files from the latest zip into the repository (not just some), then run again.")
+    print(f"Build {BUILD}: all files match")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true", help="rebuild charts even if nothing new")
@@ -408,6 +424,7 @@ def main():
     args = ap.parse_args()
     today = datetime.strptime(args.today, "%Y-%m-%d").date() if args.today else date.today()
 
+    check_build()
     db = store.connect()
     sync_episodes(db)
     missing = classify.guests_without_terms([r["guest"] for r in db.execute("SELECT guest FROM episodes ORDER BY published")])
