@@ -137,6 +137,16 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   first, and prints `KEYWORD CANDIDATES for <guest>: ...` in the run log. The top 10 with counts are stored per episode
   (`keywords`) and appear in `episode_summary.csv`; only words and counts are kept, never comment text. Pick the week's keyword
   from the list by hand. Episodes ingested before this existed have none, and the word list is in `STOP` in `classify.py`.
+- **Requested guests.** For comments tagged Request the pipeline pulls out the name asked for ("Please have Serena Williams on next",
+  "Мария, пригласи Опру Уинфри") and tallies it per episode. It is rule-based: runs of capitalised words minus cue words, Maria's
+  names and the current guest; an all-lower-case comment is read only when it says "invite/have/bring X on". Each name counts once
+  per comment, "Serena" is merged into "Serena Williams" when only one such name exists, and Russian endings are folded together.
+  Cross-language spellings go in `name_aliases.csv` (variant,name). Output: `guest_requests.csv` (one row per episode and name,
+  with this episode's count, the running total up to that episode and the overall rank), `guest_requests_table.csv` (names down,
+  episodes across, plus a total), a picture of the top 10 (`guest_requests_table.png`), `requested_top` / `requests_total` /
+  `requests_naming_someone` in `episode_summary.csv`, and a log line per new episode. Episodes whose text has already been purged
+  have no tally (it is filled in only when every comment of the episode is still held), so the table builds up from new episodes.
+  Names are typed by viewers, so skim the table before quoting it; a missed or wrongly split name is always possible.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
