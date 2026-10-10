@@ -22,6 +22,8 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      new_data: ${{ steps.pipeline.outputs.new_data }}
     steps:
       - uses: actions/checkout@v4
 
@@ -52,6 +54,7 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           COMMENT_SOURCE: ${{ vars.COMMENT_SOURCE }}
           INCLUDE_REPLIES: ${{ vars.INCLUDE_REPLIES }}
+          MAX_SCAN: ${{ vars.MAX_SCAN }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           APIFY_ACTOR_ID: ${{ vars.APIFY_ACTOR_ID }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
@@ -61,9 +64,34 @@ jobs:
           if [ "$FORCE" = "true" ]; then python run_weekly.py --force; else python run_weekly.py; fi
 
       - name: Upload charts and tables
-        if: steps.pipeline.outputs.new_data == 'true'
+        if: always() && steps.pipeline.outputs.new_data == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pretty-tough-${{ github.run_id }}
           path: out/
           retention-days: 90
+
+      # Public results page (GitHub Pages). Off unless the repository variable PUBLISH_SITE is set to "true".
+      - name: Build results page
+        if: steps.pipeline.outputs.new_data == 'true' && vars.PUBLISH_SITE == 'true'
+        run: python build_site.py --out out --site site
+
+      - name: Package results page
+        if: steps.pipeline.outputs.new_data == 'true' && vars.PUBLISH_SITE == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: run
+    if: needs.run.outputs.new_data == 'true' && vars.PUBLISH_SITE == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
