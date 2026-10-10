@@ -375,6 +375,24 @@ def alias_audit(df, e=None, min_held=100):
     return out.sort_values(["flag", "episode_guest"], ascending=[False, True]) if len(out) else out
 
 
+def alias_suggestion_table(df):
+    """Stored per-episode alias suggestions as a table, minus any word that is already one of the guest's aliases."""
+    import json
+    rows = []
+    if "alias_suggestions" not in df:
+        return pd.DataFrame()
+    for r in df.drop_duplicates("video_id").itertuples():
+        try:
+            items = json.loads(r.alias_suggestions) if isinstance(r.alias_suggestions, str) else []
+        except Exception:
+            items = []
+        have = {t for a in str(r.guest_aliases).split("|") for t in classify._strip(a).split()}
+        for x in items:
+            if x["word"] not in have:
+                rows.append({"episode_guest": r.guest, "suggested_word": x["word"], "comments_using_it": x["n"], "why": x["why"]})
+    return pd.DataFrame(rows)
+
+
 def chart_fame(e):
     r = e[e["reliable"] & e["guest_tier"].notna()]
     if r.empty:
