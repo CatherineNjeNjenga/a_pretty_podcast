@@ -100,6 +100,7 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   engagement with Maria), **Maria / Guest / Both** (names, including Russian and Chinese spellings, accents and stretched
   letters like "Lindseeeyyy"), **Show** (judges the show or episode), **Pair** (about both hosts, no names: "two queens"),
   **Unnamed** (she/her or a role like presenter, no name), **Reaction** (emoji-only or a short feeling like "Congratulations!"),
+  **Work** (no name, but mentions Maria's or the guest's business, book or organisation from `work_terms.csv`),
   **Topic** (readable comment about the subject, 5+ words) and **Neither** (the rest).
 - Only Maria, Guest and Both enter the Maria-vs-guest gap. The tone score is not used for tagging (it scores 0 on emoji,
   Russian and short comments); it is still stored for Show and tone charts.
@@ -113,6 +114,16 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   The main gap counts Both toward both sides, which cancels out of the gap (same as leaving Both out). The extra
   "sensitivity" line in the verdict assigns focused Both comments to the side they favour (`gap_focus`); if the two agree,
   the result does not depend on how Both is handled.
+- **Work terms** (`work_terms.csv`, columns `scope,guest,term,kind,risky,on,note`). A comment containing a term gets a `work` flag
+  (Maria, Guest or Both) whatever its tag, so "Maria, loved Sugarpova" stays Maria. A comment with no name gets the tag **Work**
+  instead of Show/Topic/Neither, and the flag says whose work it is. Work is never part of the gap or of Both. `risky=yes`
+  terms ("lakers", "wta", "vogue", "unstoppable") are also ordinary chatter, so they set the flag only when the comment
+  also names Maria or the guest and never create the Work tag alone. Guest terms apply only in that guest's own episode, and the
+  `guest` column must match `episodes.csv` exactly. Rows with `on=no` are ignored. Extra spellings (`nobel peace prize`, `jcrew`,
+  `j.crew`) are in the `ALSO` table in `classify.py`.
+- **Doping topic list.** `kind=topic` rows in `work_terms.csv` (all `on=no` for now) set a separate `topic` flag ("doping") and
+  never change the tag or the gap. Risky topic words count only in comments tagged Maria or Both. The verdict prints the
+  share of comments carrying the flag next to the gap. Set `on` to yes to switch the list on.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
