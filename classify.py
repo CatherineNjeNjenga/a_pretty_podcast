@@ -9,7 +9,8 @@ Categories (first match wins, in this order):
             which side it belongs to is stored in the separate `work` flag. Never counted in the gap or in Both.
   Show      judges the show or episode (cue words, or praise aimed at "this")
   Pair      about both hosts without names ("two queens", "great chemistry")
-  Unnamed   she/her or a role (host, presenter, interviewer) with no name - reported separately, never in the gap
+  Unnamed   she/her with no name (leans toward the guest) - reported separately, never in the gap
+  Host      the words host / presenter / interviewer with no name and no she/her (leans toward Maria) - never in the gap
   Reaction  emoji/symbol-only or a short generic feeling ("Congratulations!", "Wow")
   Topic     readable comment about the subject (remainder, 5+ words)
   Neither   anything else (very short, unreadable)
@@ -122,7 +123,8 @@ PROMO_RX = re.compile(r"subscribe to (me|my)|my channel|check (out )?my|follow m
 FIRST_RX = re.compile(r"^\W*(1st|first|early|top|top 1st|1st top)\W*$")
 REQUEST_RX = re.compile(
     r"\binvit\w*|\bplease\b.{0,25}\b(have|bring|get|interview|next)\b|\b(bring|get|have)\b.{1,30}\bon (your |the )?(podcast|show)\b|"
-    r"\bnext guest\b|\bnext\W*(pls|plz|please)?\W*$|\bnext (episode|video)\b|^\W*next\b|\bwe need\b.{0,30}\b(on|interview|podcast)\b|\bneed\b.{1,25}\b(podcast|interview)\b|"
+    r"\bnext guest\b|\bnext\W*(pls|plz|please)?\W*$|^\W*next (episode|video)\b|\bnext (episode|video)\W{0,3}(with|featuring|ft|guest|please|pls|plz)\b|"
+    r"\b(have|bring|invite|get|want|wish|hope|wanna|make|do)\b.{0,40}\bnext (episode|video)\b|^\W*next\b|\bwe need\b.{0,30}\b(on|interview|podcast)\b|\bneed\b.{1,25}\b(podcast|interview)\b|"
     r"\bwhen (are|will) you\b|\bwould love (it )?if you\b|\bwould be cool to see\b|\bhope to see you (collab|interview)\w*|"
     r"\binterview with\b|\u043f\u0440\u0438\u0433\u043b\u0430\u0441\w*|\u043f\u0440\u0438\u0433\u043b\u0430\u0441\u0438\w*|\u043f\u043e\u0437\u043e\u0432\w*|"
     r"\u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0443\u0438|\u0441\u0445\u043e\u0434\u0438|\u0445\u043e\u0447\u0443 \u0443\u0432\u0438\u0434\u0435\u0442\u044c|\u0436\u0434\u0435\u043c")
@@ -135,7 +137,8 @@ SHOW_RX = re.compile(
     r"\u0438\u043d\u0442\u0435\u0440\u0432\u044c\u044e|\u043f\u043e\u0434\u043a\u0430\u0441\u0442|\u043a\u0430\u043d\u0430\u043b|\u0432\u0438\u0434\u0435\u043e|\u0432\u044b\u043f\u0443\u0441\u043a|\u043f\u0435\u0440\u0435\u0434\u0430\u0447\w*|\u0448\u043e\u0443")
 PAIR_RX = re.compile(r"\b(two|2)\b.{0,12}\b(queens?|legends?|goddess\w*|icons?|ladies|women)\b|"
                      r"\b(you two|you both|both of you|you guys|the two of you|them both|chemistry)\b|\bthank (you|u) ladies\b|\blove you both\b")
-UNNAMED_RX = re.compile(r"\b(she|her|hers|she's|herself|host|presenter|interviewer)\b")
+UNNAMED_RX = re.compile(r"\b(she|her|hers|she's|herself)\b")
+HOSTWORD_RX = re.compile(r"\b(host|presenter|interviewer)\b")
 REACT_RX = re.compile(
     r"\b(congrat\w*|wow|amazing|awesome|excellent|nice|great|good|love\w*|yes+|beautiful|perfect|best|queen|legend|goddess\w*|"
     r"thank\w*|lovely|fire|brilliant|incredible|crazy|major|silent|cool|fun|gorgeous|yay|omg)\b|"
@@ -144,9 +147,9 @@ REACT_RX = re.compile(
 
 # Bump this whenever a rule, word list or alias logic below changes in a way that can change a tag. It is stored with
 # every comment so you can tell which rules produced each tag (older comments whose text is purged keep their old version).
-RULES_VERSION = "2026-10-10.2"
+RULES_VERSION = "2026-10-10.4"
 
-CATEGORIES = ["Maria", "Guest", "Both", "Work", "Show", "Request", "Pair", "Unnamed", "Reaction", "Topic", "Noise", "Neither"]
+CATEGORIES = ["Maria", "Guest", "Both", "Work", "Show", "Request", "Pair", "Unnamed", "Host", "Reaction", "Topic", "Noise", "Neither"]
 
 
 def _one(text, grx, gkey=""):
@@ -177,6 +180,8 @@ def _one(text, grx, gkey=""):
         return "Pair"
     if _any(UNNAMED_RX, vs):
         return "Unnamed"
+    if _any(HOSTWORD_RX, vs):
+        return "Host"
     if len(words) <= 6 and _any(REACT_RX, vs):
         return "Reaction"
     return "Topic" if len(words) >= 5 else "Neither"
@@ -346,6 +351,31 @@ def requested_names(df, top=15):
     merged = merge_names(counts)
     out["names"] = [{"name": k, "n": v} for k, v in sorted(merged.items(), key=lambda kv: -kv[1])[:top]]
     return out
+
+
+# --- Address vs discussion (Maria / Guest / Both comments) ---------------------------------------------------------------
+# A comment that names Maria is often just talking TO her ("Thanks Maria!", "Great job, Maria"). "address" = short (15 words or
+# fewer), second-person or thank/praise wording, and no she/her/he/they; every other Maria/Guest/Both comment is "discussion".
+# A rough rule: check it against your own labels (the sampler has a your_mode column). Same rule for the guest's name.
+ADDRESS_RX = re.compile(r"\b(you|your|youre|you're|u|ur|thank|thanks|thankyou|congrat\w*|bravo|well done|great job|good job|love you|"
+                        r"proud of|miss you|keep it up|keep going)\b|"
+                        r"\u0432\u044b|\u0432\u0430\u043c|\u0432\u0430\u0441|\u0432\u0430\u043c\u0438|\u0442\u0435\u0431\u044f|\u0442\u0435\u0431\u0435|\u0441\u043f\u0430\u0441\u0438\u0431\u043e|"
+                        r"\u043f\u043e\u0437\u0434\u0440\u0430\u0432\u043b\u044f\w*|\u043c\u043e\u043b\u043e\u0434\u0435\u0446")
+THIRD_RX = re.compile(r"\b(she|her|hers|he|him|his|they|them|their)\b")
+
+
+def _mode_one(text, about):
+    if about not in ("Maria", "Guest", "Both"):
+        return None
+    v = variants(text)[0]
+    if n_words(text) <= 15 and ADDRESS_RX.search(v) and not THIRD_RX.search(v):
+        return "address"
+    return "discussion"
+
+
+def mode_all(df, about):
+    """'address' / 'discussion' for Maria, Guest and Both comments; None for every other tag."""
+    return np.array([_mode_one(t, ab) for t, ab in zip(df["comment"], about)], dtype=object)
 
 
 def _meta(df):
