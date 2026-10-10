@@ -11,6 +11,8 @@ import os
 import requests
 import pandas as pd
 
+BUILD = "2026-10-10.5"   # bumped with every release; run_weekly.py checks that all the files below carry the same value
+
 BASE = "https://www.googleapis.com/youtube/v3"
 DEFAULT_MAX_COMMENTS = int(os.environ.get("MAX_COMMENTS", "5000"))
 INCLUDE_REPLIES = os.environ.get("INCLUDE_REPLIES", "false").lower() == "true"
