@@ -20,6 +20,7 @@ import os
 import re
 import argparse
 import hashlib
+import json
 from datetime import date, datetime, timedelta
 
 import numpy as np
@@ -144,6 +145,7 @@ def ingest(db, episodes, today):
         d["words"] = d["comment"].apply(classify.n_words)
         d["replies"] = pd.to_numeric(d["replies"], errors="coerce") if "replies" in d else None
         d = a.tag(a.score(d))            # score, then tag (Show needs the tone); tag + sentiment at ingest, so they survive the text purge
+        kw = classify.keywords(d)         # candidates for the week's keyword, from text we still hold (counts only are stored)
         d["likes"] = pd.to_numeric(d["likes"], errors="coerce").fillna(0).astype(int)
         rows = [(e["video_id"], r.comment_key, r.comment, int(r.likes), int(bool(r.is_reply)),
                  float(r.compound), r.about, today.isoformat(), classify.RULES_VERSION,
@@ -154,9 +156,10 @@ def ingest(db, episodes, today):
         db.executemany("INSERT OR IGNORE INTO comments "
                        "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at, rules_version, focus, work, topic, posted_at, script, words, replies) "
                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-        db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=?, authors=? WHERE video_id=?",
-                   (len(rows), today.isoformat(), authors, e["video_id"]))
+        db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=?, authors=?, keywords=? WHERE video_id=?",
+                   (len(rows), today.isoformat(), authors, json.dumps(kw, ensure_ascii=False), e["video_id"]))
         store_video_stats(db, e["video_id"], today)
+        print(f"  KEYWORD CANDIDATES for {e['guest']}: " + (", ".join(f"{k['w']} ({k['n']}{', work' if k['kind'] == 'work' else ''})" for k in kw[:5]) or "none reached 3 comments"))
         print(f"  {e['video_id']}: stored {len(rows)} comments from {authors if authors is not None else '?'} distinct commenters")
         done += 1
     return done
@@ -230,7 +233,7 @@ def load_all(db):
                   c.work AS stored_work, c.topic AS stored_topic, c.rules_version,
                   c.posted_at, c.script AS stored_script, c.words AS stored_words, c.replies,
                   e.guest, e.guest_aliases, e.guest_tier, e.published,
-                  e.views, e.video_likes, e.video_comments, e.views_at, e.authors
+                  e.views, e.video_likes, e.video_comments, e.views_at, e.authors, e.keywords
            FROM comments c JOIN episodes e USING (video_id) WHERE e.status='done'"""))
     if c.empty:
         return c
