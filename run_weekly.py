@@ -217,6 +217,22 @@ def refresh_alias_suggestions(db):
                    (json.dumps(classify.alias_suggestions(d, background_texts(db, e["video_id"])), ensure_ascii=False), e["video_id"]))
 
 
+def backfill_keywords(db):
+    """Episodes finished before keywords existed: work them out now, but only when every comment of the episode still has its text
+    (otherwise the counts would be partial). Time-sensitive: after the 28-day purge this is no longer possible."""
+    eps = db.execute("""SELECT e.video_id, e.guest, e.guest_aliases FROM episodes e
+                        WHERE e.status='done' AND e.keywords IS NULL
+                          AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.video_id=e.video_id AND c.text IS NULL)
+                          AND EXISTS (SELECT 1 FROM comments c WHERE c.video_id=e.video_id)""")
+    for e in eps:
+        d = pd.DataFrame(db.execute("SELECT text AS comment FROM comments WHERE video_id=?", (e["video_id"],)))
+        d["guest"], d["guest_aliases"], d["video_id"] = e["guest"], e["guest_aliases"], e["video_id"]
+        d["about"] = classify.classify(d)
+        kw = classify.keywords(d)
+        db.execute("UPDATE episodes SET keywords=? WHERE video_id=?", (json.dumps(kw, ensure_ascii=False), e["video_id"]))
+        print(f"  KEYWORD CANDIDATES for {e['guest']}: " + (", ".join(f"{k['w']} ({k['n']}{', work' if k['kind'] == 'work' else ''})" for k in kw[:5]) or "none reached 3 comments"))
+
+
 def backfill_requests(db):
     """Episodes finished before this existed: work out the requested names, but only when every comment of the episode still has
     its text (otherwise the tally would be partial and misleading)."""
@@ -402,6 +418,7 @@ def main():
     n_new = ingest(db, todo, today)
     retag_stored(db)
     backfill_video_stats(db, today)
+    backfill_keywords(db)
     backfill_requests(db)
     refresh_alias_suggestions(db)
     purge_old_text(db, today)
