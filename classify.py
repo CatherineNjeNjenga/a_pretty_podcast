@@ -68,7 +68,7 @@ def _term_rx(term):
 
 
 def work_terms(path=None):
-    """{'maria': [(rx, risky, kind)], 'guests': {guest_key: [(rx, risky, kind)]}} from work_terms.csv (cached)."""
+    """{'maria': [(rx, risky, kind, term)], 'guests': {guest_key: [(rx, risky, kind, term)]}} from work_terms.csv (cached)."""
     global _WORK
     if _WORK is not None and path is None:
         return _WORK
@@ -79,7 +79,7 @@ def work_terms(path=None):
             term = (r.get("term") or "").strip()
             if not term or (r.get("on") or "yes").strip().lower() != "yes":
                 continue
-            item = (_term_rx(term), (r.get("risky") or "").strip().lower() == "yes", (r.get("kind") or "").strip().lower())
+            item = (_term_rx(term), (r.get("risky") or "").strip().lower() == "yes", (r.get("kind") or "").strip().lower(), term.lower())
             if (r.get("scope") or "").strip().lower() == "maria":
                 out["maria"].append(item)
             else:
@@ -101,7 +101,7 @@ def _work_flags(vs, about, guest_key):
     named = about in ("Maria", "Guest", "Both") or None
     sides, safe, topic = set(), False, None
     for side, items in (("Maria", wt["maria"]), ("Guest", wt["guests"].get(guest_key, []))):
-        for rx, risky, kind in items:
+        for rx, risky, kind, _ in items:
             if not _any(rx, vs):
                 continue
             if kind == "topic":
@@ -196,6 +196,49 @@ def script_of(text):
 
 def n_words(text):
     return len(re.findall(r"\w+", URL_RX.sub(" ", text)))
+
+
+# --- Keyword candidates for an episode ------------------------------------------------------------------------------
+# Computed at ingest while the text is still held, and stored as a short list of (word, number of comments containing it).
+# Only counts are kept, never comment text. Names (Maria, the guest), show words and everyday filler are left out.
+STOP = set("""
+the and for that this with you your are was were have has had not but all just like what when who how why they them their there then than
+from about out can will would could should its it's i'm im dont don't didn cant can't isnt wasnt really very much more most some any
+only also even still too one get got going gonna make made makes see saw watch watched want need think thought know feel felt said say says
+people person time times way thing things lot every each other another because while after before over into here where which these those
+been being does did doing done let lets great good amazing awesome love loved loving best better nice wow thank thanks thankyou thank
+yes yeah yep please maybe always never ever again back new old first last next now today week year years day days
+podcast podcasts episode episodes video videos show shows interview interviews guest guests host hosts channel conversation conversations
+youtube watching listening listen listened pretty tough
+she her hers he him his we our us me my mine ours
+это как что для все вы мы она он на не но или только очень было был была бы же уже еще ещё будет можно так такой этот мне мой ваш вас спасибо подкаст интервью выпуск гость
+""".split())
+
+
+def keywords(df, top=10, min_count=3):
+    """Top words for ONE episode's comments (df columns: comment, about, guest, guest_aliases) as [{"w", "n", "kind"}].
+    Work terms that matched (kind 'work') come first in the candidates; plain words are kind 'word'."""
+    from collections import Counter
+    if df.empty:
+        return []
+    gname = df["guest"].iloc[0] if "guest" in df and isinstance(df["guest"].iloc[0], str) else ""
+    skip = {t for a in str(df["guest_aliases"].iloc[0]).split("|") for t in re.findall(r"\w+", _strip(a))}
+    skip |= set(re.findall(r"\w+", _strip(gname)))
+    wt, gk = work_terms(), _strip(gname).strip()
+    words, work = Counter(), Counter()
+    for t, ab in zip(df["comment"], df["about"]):
+        vs = variants(t)
+        toks = {w for w in re.findall(r"[^\W\d_]{3,}", URL_RX.sub(" ", vs[min(1, len(vs) - 1)]))}
+        words.update(w for w in toks if w not in STOP and w not in skip and not MARIA_RX.fullmatch(w))
+        named = ab in ("Maria", "Guest", "Both")
+        for items in (wt["maria"], wt["guests"].get(gk, [])):
+            for rx, risky, kind, term in items:
+                if kind != "topic" and _any(rx, vs) and (named or not risky):
+                    work[term] += 1
+    out = [{"w": w, "n": n, "kind": "work"} for w, n in work.most_common() if n >= min_count]
+    seen = set(re.findall(r"\w+", " ".join(x["w"] for x in out)))
+    out += [{"w": w, "n": n, "kind": "word"} for w, n in words.most_common(top * 3) if n >= min_count and w not in seen]
+    return out[:top]
 
 
 def _meta(df):
