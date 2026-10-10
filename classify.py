@@ -122,7 +122,7 @@ PROMO_RX = re.compile(r"subscribe to (me|my)|my channel|check (out )?my|follow m
 FIRST_RX = re.compile(r"^\W*(1st|first|early|top|top 1st|1st top)\W*$")
 REQUEST_RX = re.compile(
     r"\binvit\w*|\bplease\b.{0,25}\b(have|bring|get|interview|next)\b|\b(bring|get|have)\b.{1,30}\bon (your |the )?(podcast|show)\b|"
-    r"\bnext guest\b|\bnext (episode|video)\b|^\W*next\b|\bwe need\b.{0,30}\b(on|interview|podcast)\b|\bneed\b.{1,25}\b(podcast|interview)\b|"
+    r"\bnext guest\b|\bnext\W*(pls|plz|please)?\W*$|\bnext (episode|video)\b|^\W*next\b|\bwe need\b.{0,30}\b(on|interview|podcast)\b|\bneed\b.{1,25}\b(podcast|interview)\b|"
     r"\bwhen (are|will) you\b|\bwould love (it )?if you\b|\bwould be cool to see\b|\bhope to see you (collab|interview)\w*|"
     r"\binterview with\b|\u043f\u0440\u0438\u0433\u043b\u0430\u0441\w*|\u043f\u0440\u0438\u0433\u043b\u0430\u0441\u0438\w*|\u043f\u043e\u0437\u043e\u0432\w*|"
     r"\u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0443\u0438|\u0441\u0445\u043e\u0434\u0438|\u0445\u043e\u0447\u0443 \u0443\u0432\u0438\u0434\u0435\u0442\u044c|\u0436\u0434\u0435\u043c")
@@ -144,7 +144,7 @@ REACT_RX = re.compile(
 
 # Bump this whenever a rule, word list or alias logic below changes in a way that can change a tag. It is stored with
 # every comment so you can tell which rules produced each tag (older comments whose text is purged keep their old version).
-RULES_VERSION = "2026-10-10.1"
+RULES_VERSION = "2026-10-10.2"
 
 CATEGORIES = ["Maria", "Guest", "Both", "Work", "Show", "Request", "Pair", "Unnamed", "Reaction", "Topic", "Noise", "Neither"]
 
@@ -239,6 +239,113 @@ def keywords(df, top=10, min_count=3):
     seen = set(re.findall(r"\w+", " ".join(x["w"] for x in out)))
     out += [{"w": w, "n": n, "kind": "word"} for w, n in words.most_common(top * 3) if n >= min_count and w not in seen]
     return out[:top]
+
+
+# --- Requested guests -------------------------------------------------------------------------------------------------
+# For comments tagged Request ("Please have Serena Williams on next", "Мария, пригласи Опру"): pull out the name(s) asked for.
+# Rule of thumb, not magic: runs of capitalised words (Latin or Cyrillic), minus cue words, Maria's names and the current guest's
+# aliases. A comment typed all in lower case falls back to a narrow "invite/have/bring X on" pattern. Russian names are grouped by
+# a crude stem (Опра/Опру/Опры). Each name counts once per comment. Stored per episode as {"total", "named", "names":[{"name","n"}]}.
+_CAP = "A-Z\u00c0-\u00de\u0410-\u042f\u0401"
+CAP_RUN = re.compile(rf"(?<![\w'])[{_CAP}][\w'\u2019\-]*(?: [{_CAP}][\w'\u2019\-]*){{0,3}}")
+LOWER_ASK = re.compile(r"\b(?:invite|have|bring|get|interview|host)\s+(?:the\s+)?([a-z][a-z'\-]+(?:\s[a-z][a-z'\-]+){0,2}?)\s+(?:on|to|for|next|in|as)\b")
+NAME_STOP = set("""
+please can could would will hope hey hi hello love loved i im i'm you your we the this that next maybe pretty tough maria masha sharapova
+youtube podcast show episode guest interview invite have bring get when why how what who it its thank thanks yes wow omg her she he his
+great amazing and but also need want request suggestion ps sir ms mrs mr dr on to for in as of or with from at by my our us me so if
+do does did is are was were be been not no just really very more most some any one two next time ever again too still more
+\u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430 \u043f\u0440\u0438\u0433\u043b\u0430\u0441\u0438 \u043f\u0440\u0438\u0433\u043b\u0430\u0441\u0438\u0442\u0435 \u043f\u0440\u0438\u0433\u043b\u0430\u0448\u0430\u0439 \u043f\u0440\u0438\u0433\u043b\u0430\u0448\u0430\u0439\u0442\u0435 \u043f\u043e\u0437\u043e\u0432\u0438 \u043f\u043e\u0437\u043e\u0432\u0438\u0442\u0435 \u0445\u043e\u0447\u0443 \u043f\u0440\u0438\u0432\u0435\u0442 \u0437\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435 \u0441\u043f\u0430\u0441\u0438\u0431\u043e \u043c\u0430\u0440\u0438\u044f \u043c\u0430\u0448\u0430 \u0432\u044b \u044f \u043c\u044b \u0430 \u0438 \u043d\u043e \u0434\u043b\u044f \u0431\u044b\u043b\u043e
+""".split())
+PRONOUNS = set("her him them someone anyone somebody everyone more others".split())
+
+
+def _name_key(name):
+    toks = []
+    for t in re.findall(r"[^\W\d_]+", _strip(re.sub(r"['\u2019]s\b", "", name))):
+        if re.search("[\u0400-\u04ff]", t) and len(t) >= 4 and t[-1] in "\u0443\u044e\u044b\u0438\u0435\u0430":
+            t = t[:-1]                                         # crude stem: Опра / Опру / Опры -> опр
+        toks.append(t)
+    return " ".join(toks)
+
+
+def _names_in(text, skip):
+    letters = [ch for ch in text if ch.isalpha()]
+    upper_share = sum(ch.isupper() for ch in letters) / len(letters) if letters else 0
+    found = []
+    for run in CAP_RUN.findall(text):
+        toks = [re.sub(r"['\u2019]s$", "", t) for t in run.split()]
+        while toks and (_strip(toks[0]) in NAME_STOP or _strip(toks[0]) in skip or MARIA_RX.fullmatch(_strip(toks[0]))):
+            toks.pop(0)
+        while toks and (_strip(toks[-1]) in NAME_STOP or _strip(toks[-1]) in skip or MARIA_RX.fullmatch(_strip(toks[-1]))):
+            toks.pop()
+        if toks and len(toks) <= 3 and not (upper_share > 0.7 and len(toks) == 1 and len(toks[0]) <= 3):
+            found.append(" ".join(toks))
+    if not found and text == text.lower():
+        m = LOWER_ASK.search(_strip(text))
+        if m:
+            toks = [t for t in m.group(1).split() if t not in NAME_STOP and t not in PRONOUNS and t not in skip]
+            if toks and len(toks) == len(m.group(1).split()):
+                found.append(" ".join(w.capitalize() for w in toks))
+    return found
+
+
+NAME_ALIAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "name_aliases.csv")
+
+
+def name_aliases():
+    """{name key: official name} from name_aliases.csv (columns variant,name), e.g. a Russian spelling -> the English name."""
+    out = {}
+    if os.path.exists(NAME_ALIAS_FILE):
+        for r in csv.DictReader(open(NAME_ALIAS_FILE, encoding="utf-8-sig")):
+            if (r.get("variant") or "").strip() and (r.get("name") or "").strip():
+                out[_name_key(r["variant"])] = r["name"].strip()
+    return out
+
+
+def merge_names(counts, with_map=False):
+    """counts: {name: n}. Merges spellings that share a key, and a lone first or last name into the single longer name that
+    contains it ("Serena" into "Serena Williams"). Returns {display name: n}, the display being the most common spelling
+    (and, with with_map=True, also {original name: display name})."""
+    groups, shown, owner = {}, {}, {}
+    alias = name_aliases()
+    for name0, n in counts.items():
+        name = alias.get(_name_key(name0), name0)
+        k = _name_key(name)
+        groups[k] = groups.get(k, 0) + n
+        shown.setdefault(k, {})[name] = n + shown.get(k, {}).get(name, 0)
+        owner[name0] = k
+        shown[k].setdefault(name, 0)
+    multi = [k for k in groups if " " in k]
+    for k in [k for k in list(groups) if " " not in k]:
+        hit = [m for m in multi if k in m.split()[:1] + m.split()[-1:]]
+        if len(hit) == 1:
+            groups[hit[0]] += groups.pop(k)
+            for nm, c in shown.pop(k).items():
+                shown[hit[0]][nm] = shown[hit[0]].get(nm, 0) + c
+                owner[nm] = hit[0]
+    disp = {k: max(shown[k], key=lambda x: (len(x.split()), shown[k][x])) for k in groups}
+    merged = {disp[k]: n for k, n in groups.items()}
+    return (merged, {nm: disp[k] for nm, k in owner.items()}) if with_map else merged
+
+
+def requested_names(df, top=15):
+    """df: comment, about, guest, guest_aliases for ONE episode -> {"total", "named", "names": [{"name", "n"}]} (Request comments only)."""
+    req = df[df["about"] == "Request"]
+    out = {"total": int(len(req)), "named": 0, "names": []}
+    if req.empty:
+        return out
+    skip = {t for a in str(df["guest_aliases"].iloc[0]).split("|") for t in re.findall(r"\w+", _strip(a))}
+    if "guest" in df and isinstance(df["guest"].iloc[0], str):
+        skip |= set(re.findall(r"\w+", _strip(df["guest"].iloc[0])))
+    counts = {}
+    for t in req["comment"]:
+        names = {_name_key(n): n for n in _names_in(t, skip)}
+        out["named"] += bool(names)
+        for n in names.values():
+            counts[n] = counts.get(n, 0) + 1
+    merged = merge_names(counts)
+    out["names"] = [{"name": k, "n": v} for k, v in sorted(merged.items(), key=lambda kv: -kv[1])[:top]]
+    return out
 
 
 def _meta(df):
