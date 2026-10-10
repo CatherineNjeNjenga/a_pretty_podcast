@@ -63,6 +63,37 @@ def score(df):
     return df
 
 
+VIEWS_MAX_AGE_DAYS = 10   # a view count read more than this long after upload is not comparable across episodes
+
+
+def _col(d, name):
+    return d[name] if name in d else pd.Series(np.nan, index=d.index)
+
+
+def _engagement(d, mar, gst):
+    """Reach and depth measures that do not depend on the Maria/guest tags."""
+    n = len(d)
+    out = {}
+    views = pd.to_numeric(_col(d, "views"), errors="coerce").iloc[0]
+    age = (pd.to_datetime(_col(d, "views_at").iloc[0], errors="coerce") - pd.to_datetime(_col(d, "published").iloc[0], errors="coerce")).days
+    ok = bool(pd.notna(views) and views > 0 and pd.notna(age) and age <= VIEWS_MAX_AGE_DAYS)
+    out.update(views=views, views_age_days=age, views_comparable=ok,
+               comments_per_1k_views=n / views * 1000 if ok else np.nan,
+               maria_per_1k_views=mar.sum() / views * 1000 if ok else np.nan,
+               guest_per_1k_views=gst.sum() / views * 1000 if ok else np.nan)
+    out["gap_per_1k_views"] = out["maria_per_1k_views"] - out["guest_per_1k_views"]
+    au = pd.to_numeric(_col(d, "authors"), errors="coerce").iloc[0]
+    out.update(distinct_commenters=au, comments_per_commenter=n / au if pd.notna(au) and au > 0 else np.nan)
+    sc, w, rp = _col(d, "script"), pd.to_numeric(_col(d, "words"), errors="coerce"), pd.to_numeric(_col(d, "replies"), errors="coerce")
+    out.update(share_cyrillic=(sc == "cyrillic").mean() if sc.notna().any() else np.nan,
+               median_words=w.median(), long_share=(w >= 30).mean() if w.notna().any() else np.nan,
+               reply_share=(rp[~d["is_reply"].astype(bool)] > 0).mean() if rp.notna().any() else np.nan)
+    ts = pd.to_datetime(_col(d, "posted_at"), errors="coerce", utc=True)
+    pub = pd.to_datetime(_col(d, "published").iloc[0], errors="coerce", utc=True)
+    out["first_day_share"] = ((ts - pub) < pd.Timedelta(days=1))[ts.notna()].mean() if ts.notna().any() and pd.notna(pub) else np.nan
+    return out
+
+
 def per_episode(df, min_named=10):
     rows = []
     for vid, d in df.groupby("video_id"):
@@ -74,7 +105,9 @@ def per_episode(df, min_named=10):
         both = d["about"] == "Both"
         mar_f = (d["about"] == "Maria") | (both & (foc != "Guest"))      # Both counts for Maria unless it is guest-focused
         gst_f = (d["about"] == "Guest") | (both & (foc != "Maria"))      # ...and for the guest unless it is Maria-focused
+        eng = _engagement(d, mar, gst)
         rows.append({
+            **eng,
             "video_id": vid, "guest": d["guest"].iloc[0], "guest_tier": d.get("guest_tier", pd.Series([np.nan])).iloc[0],
             "n_comments": len(d), "n_named": int(named.sum()),
             "maria_share_all": mar.mean(), "guest_share_all": gst.mean(),
@@ -127,6 +160,11 @@ def verdict(e):
         lo, hi = boot_ci(x)
         out.append(f"{label}: mean gap (Maria - guest) = {x.mean():+.3f} [95% CI {lo:+.3f}, {hi:+.3f}]; "
                    f"Maria ahead in {k}/{n} episodes; two-sided sign test p = {p:.4f}")
+    if "gap_per_1k_views" in r and r["gap_per_1k_views"].notna().any():
+        g = r["gap_per_1k_views"].dropna()
+        out.append(f"(per audience size, {len(g)} episode(s) with a comparable view count) comments naming Maria "
+                   f"{r['maria_per_1k_views'].mean():.2f} vs guest {r['guest_per_1k_views'].mean():.2f} per 1,000 views; "
+                   f"Maria ahead in {int((g > 0).sum())}/{len(g)}")
     if "work_maria_share" in r and r["work_maria_share"].notna().any():
         out.append("(not part of the gap) comments mentioning work terms: Maria's "
                    f"{r['work_maria_share'].mean():.1%}, guests' {r['work_guest_share'].mean():.1%} of comments; "
@@ -211,6 +249,22 @@ def chart_categories(df):
     fig.update_layout(showlegend=False)
     fig.update_xaxes(title_text="Share of comments", tickformat=".0%", gridcolor=GRID, range=[0, max(0.1, sh.max() * 1.2)])
     fig.update_yaxes(title_text="")
+    return fig
+
+
+def chart_engagement(e):
+    """Comments naming Maria vs naming the guest, per 1,000 views, for episodes whose view count was read within 10 days of upload."""
+    r = e[e["views_comparable"].fillna(False).astype(bool)].sort_values("published")
+    if r.empty:
+        return None
+    fig = go.Figure()
+    for col, name, color in (("maria_per_1k_views", "Maria (incl. both-named)", C_MARIA), ("guest_per_1k_views", "Guest (incl. both-named)", C_GUEST)):
+        fig.add_trace(go.Bar(y=r["guest"], x=r[col], orientation="h", name=name, marker=dict(color=color, line=dict(color="#FFFFFF", width=2)),
+                             hovertemplate="%{y}: %{x:.2f} per 1,000 views<extra>" + name + "</extra>"))
+    style(fig, "Comments naming Maria vs the guest, per 1,000 views", 1300, max(600, 55 * len(r) + 220))
+    fig.update_layout(barmode="group")
+    fig.update_xaxes(title_text="Comments per 1,000 views", gridcolor=GRID)
+    fig.update_yaxes(title_text="", autorange="reversed")
     return fig
 
 
