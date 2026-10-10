@@ -12,7 +12,7 @@ Inputs
 Method
     - Each comment gets one tag from classify.py, first match wins: Noise, Request (asks for a guest; wins over
       any name), Maria / Guest / Both (names, incl. Russian/Chinese spellings and stretched letters), Show
-      (judges the show/episode), Pair (about both hosts, no names), Unnamed (she/her or a role, no name),
+      (judges the show/episode), Pair (about both hosts, no names), Unnamed (she/her, no name), Host (host/presenter, no name),
       Reaction (emoji or short feeling), Topic (readable comment about the subject), Neither.
       Only Maria, Guest and Both enter the Maria-vs-guest gap. The tone score plays no part in tagging.
     - Per episode: share of ALL comments, and share of NAMED comments (Maria+Guest),
@@ -52,6 +52,7 @@ def load(comments_path, guests_path):
 def tag(df):
     df["about"] = classify.classify(df)
     df["focus"] = classify.focus_all(df, df["about"].values)   # Maria / Guest / Joint for Both comments, else None
+    df["mode"] = classify.mode_all(df, df["about"].values)   # address vs discussion, for Maria/Guest/Both comments
     df["work"], df["topic"] = classify.flags_all(df, df["about"].values)   # Work-term side (Maria/Guest/Both) and doping topic flag
     return df
 
@@ -125,6 +126,13 @@ def per_episode(df, min_named=10):
         mar_f = (d["about"] == "Maria") | (both & (foc != "Guest"))      # Both counts for Maria unless it is guest-focused
         gst_f = (d["about"] == "Guest") | (both & (foc != "Maria"))      # ...and for the guest unless it is Maria-focused
         eng = _engagement(d, mar, gst)
+        md = d["mode"] if "mode" in d else pd.Series(None, index=d.index, dtype=object)
+        wd = pd.to_numeric(d["words"], errors="coerce") if "words" in d else pd.Series(np.nan, index=d.index)
+        disc_m, disc_g = mar & (md == "discussion"), gst & (md == "discussion")
+        eng.update(maria_address_share=(md[mar] == "address").mean() if mar.any() and md[mar].notna().any() else np.nan,
+                   guest_address_share=(md[gst] == "address").mean() if gst.any() and md[gst].notna().any() else np.nan,
+                   gap_discussion=disc_m.mean() - disc_g.mean() if md.notna().any() else np.nan,
+                   gap_words=(wd[mar].sum() - wd[gst].sum()) / wd.sum() if wd.notna().any() and wd.sum() > 0 else np.nan)
         eng["keywords"] = _kw_text(_col(d, "keywords").iloc[0])
         eng.update(_req_cols(_col(d, "requested").iloc[0]))
         rows.append({
@@ -178,8 +186,12 @@ def verdict(e):
     out = []
     for col, label in [("gap_all", "share of all comments"), ("gap_likes", "like-weighted share"),
                        ("gap_focus", "sensitivity: Both comments assigned by focus"),
-                       ("gap_unnamed_worst", "extreme case: every Unnamed (she/her/host) comment given to the guest")]:
+                       ("gap_discussion", "only comments that discuss (not just address) Maria or the guest"),
+                       ("gap_words", "depth-weighted: share of all words written about Maria minus about the guest"),
+                       ("gap_unnamed_worst", "extreme case: every Unnamed (she/her, no name) comment given to the guest")]:
         x = r[col].dropna()
+        if x.empty:
+            continue
         n, k, p = sign_test(x)
         lo, hi = boot_ci(x)
         out.append(f"{label}: mean gap (Maria - guest) = {x.mean():+.3f} [95% CI {lo:+.3f}, {hi:+.3f}]; "
