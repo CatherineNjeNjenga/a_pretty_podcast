@@ -404,6 +404,14 @@ def main():
     df[["video_id", "guest", "published", "likes", "is_reply", "about", "focus", "work", "topic", "compound", "rules_version", "posted_at", "script", "words", "replies"]].to_csv(
         f"{args.out}/tagged_comments.csv", index=False)
     e.to_csv(f"{args.out}/episode_summary.csv", index=False)
+    audit = a.alias_audit(df, e)
+    if len(audit):
+        audit.to_csv(f"{args.out}/alias_audit.csv", index=False)
+        bad = audit[(audit["flag"] != "") | (audit.get("episode_note", "") != "")]
+        print(f"\nALIAS AUDIT: {len(bad)} of {len(audit)} alias row(s) flagged (see alias_audit.csv; text still held for "
+              f"{int(df['comment'].notna().sum())} comments)")
+        for r in bad.head(12).itertuples():
+            print(f"  - {r.episode_guest} / '{r.alias}': {r.flag or r.episode_note}")
     req_long, req_wide = request_tables(df)
     if req_long is not None and len(req_wide):
         req_long.to_csv(f"{args.out}/guest_requests.csv", index=False)
