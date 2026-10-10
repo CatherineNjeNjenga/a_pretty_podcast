@@ -378,6 +378,64 @@ def mode_all(df, about):
     return np.array([_mode_one(t, ab) for t, ab in zip(df["comment"], about)], dtype=object)
 
 
+# --- Alias suggestions --------------------------------------------------------------------------------------------------
+# Words in ONE episode's comments that may be another way of naming the guest. Never added automatically: the list goes to
+# alias_suggestions.csv for you to copy into guest_aliases. Two kinds:
+#   spelling   a word 1-2 edits away from an existing alias (or the guest's name) that 3+ comments use ("ahsley", "jenie")
+#   distinctive  a word in 5+ of this episode's comments that is much rarer in the other episodes' comments still held
+#              ("giggler"); needs 200+ comments from other episodes to compare against
+# Request comments are skipped (they are full of other people's names). Stored per episode as [{"word","n","why"}].
+def _edits(a, b, cap=2):
+    """Restricted Damerau-Levenshtein distance, giving up above cap."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev2, prev = None, list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cost = a[i - 1] != b[j - 1]
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+def _doc_freq(texts):
+    from collections import Counter
+    c = Counter()
+    for t in texts:
+        c.update(set(re.findall(r"[^\W\d_]{3,}", variants(t)[0])))
+    return c
+
+
+def alias_suggestions(df, background=None, top=8, min_n=3, min_distinct=5):
+    """df: comment, about, guest, guest_aliases for ONE episode. background: texts of other episodes (still held), or None."""
+    if df.empty:
+        return []
+    own = df[df["about"] != "Request"] if "about" in df else df
+    gname = df["guest"].iloc[0] if "guest" in df and isinstance(df["guest"].iloc[0], str) else ""
+    have = {t for a in str(df["guest_aliases"].iloc[0]).split("|") for t in re.findall(r"[^\W\d_]+", _strip(a))}
+    base = {t for t in have | set(re.findall(r"[^\W\d_]+", _strip(gname))) if len(t) >= 4}
+    fo = _doc_freq(own["comment"])
+    n_own = max(len(own), 1)
+    fb = _doc_freq(background) if background is not None and len(background) else None
+    n_bg = len(background) if fb is not None else 0
+    out = {}
+    for w, n in fo.items():
+        if n < min_n or w in STOP or w in have or w in base or MARIA_RX.fullmatch(w) or re.search("[\u0400-\u04ff]", w):
+            continue
+        if re.sub(r"(.)\1{2,}", r"\1", w) in have or re.sub(r"(.)\1{2,}", r"\1\1", w) in have:
+            continue                                    # a stretched spelling that the matcher already catches
+        near = [b for b in base if _edits(w, b, 2 if len(b) > 5 else 1) <= (2 if len(b) > 5 else 1)]
+        common = fb is not None and fb.get(w, 0) / max(n_bg, 1) >= 0.5 * n / n_own
+        if near and not common:
+            out[w] = {"word": w, "n": int(n), "why": f"spelling variant of '{min(near, key=lambda b: _edits(w, b))}'"}
+        elif fb is not None and n_bg >= 200 and n >= min_distinct and fb.get(w, 0) / n_bg * 6 <= n / n_own:
+            out[w] = {"word": w, "n": int(n), "why": "distinctive: common here, rare in other episodes"}
+    return sorted(out.values(), key=lambda x: (x["why"].startswith("distinctive"), -x["n"]))[:top]
+
+
 def _meta(df):
     cols = ["video_id", "guest_aliases"] + (["guest"] if "guest" in df else [])
     d = df.drop_duplicates("video_id")[cols]
