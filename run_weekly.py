@@ -262,6 +262,9 @@ def main():
 
     db = store.connect()
     sync_episodes(db)
+    missing = classify.guests_without_terms([r["guest"] for r in db.execute("SELECT guest FROM episodes ORDER BY published")])
+    print("Work terms: " + (f"none yet for {len(missing)} guest(s): {', '.join(missing)} (add rows to work_terms.csv)"
+                            if missing else "every guest has at least one row in work_terms.csv"))
     todo = due_episodes(db, today)
     print(f"{len(todo)} episode(s) due for a snapshot")
     n_new = ingest(db, todo, today)
