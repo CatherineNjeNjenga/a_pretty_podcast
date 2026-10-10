@@ -182,3 +182,18 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
 - Local testing: with no Turso variables set, the code uses a local `pretty_tough.db` SQLite file.
 - `scrape_reviews.py`, `analyze.py` (Apple Podcasts reviews) and the manual `analyze_youtube.py` CLI are
   kept; `run_weekly.py` reuses functions from `analyze_youtube.py`.
+
+
+## Public results page (GitHub Pages)
+`build_site.py` turns the output folder into `site/index.html`: the verdict, the charts (PNG with a link to an interactive version),
+the episode table, the most-requested guests and a few CSV downloads. It publishes only derived, episode-level files: no comment text,
+no usernames, and not the per-comment CSV or the alias audit. The caveats shown on the page are the `CAVEATS` list at the top of
+`build_site.py`; edit them as you like.
+
+To switch it on (once):
+1. Repository > Settings > Pages > Build and deployment > Source: **GitHub Actions**.
+2. Repository > Settings > Secrets and variables > Actions > Variables: add `PUBLISH_SITE` = `true`.
+3. Run the weekly workflow. The address appears on the run's "deploy" job and under Settings > Pages.
+
+Until `PUBLISH_SITE` is `true`, nothing is published. The page is public to anyone with the link (and on a free GitHub plan Pages needs a public
+repository), so read the page once before sharing it. Try it locally with `python build_site.py` after a run.
