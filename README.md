@@ -132,6 +132,11 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   that got replies, and share posted in the first 24 hours. Episodes finished before this existed get today's view count once
   (`views_at` shows when); a count read more than 10 days after upload is not used in the per-1,000-views numbers or chart
   (`comments_per_1k_views.png`), because older episodes have simply had longer to collect views.
+- **Keyword candidates.** At ingest, while the text is still held, the pipeline counts the words that appear in the most comments
+  (names, the guest's aliases, show words and everyday filler are left out; a word needs 3+ comments), puts any matched Work terms
+  first, and prints `KEYWORD CANDIDATES for <guest>: ...` in the run log. The top 10 with counts are stored per episode
+  (`keywords`) and appear in `episode_summary.csv`; only words and counts are kept, never comment text. Pick the week's keyword
+  from the list by hand. Episodes ingested before this existed have none, and the word list is in `STOP` in `classify.py`.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
