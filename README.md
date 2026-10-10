@@ -136,7 +136,7 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   (names, the guest's aliases, show words and everyday filler are left out; a word needs 3+ comments), puts any matched Work terms
   first, and prints `KEYWORD CANDIDATES for <guest>: ...` in the run log. The top 10 with counts are stored per episode
   (`keywords`) and appear in `episode_summary.csv`; only words and counts are kept, never comment text. Pick the week's keyword
-  from the list by hand. Episodes ingested before this existed have none, and the word list is in `STOP` in `classify.py`.
+  from the list by hand. Episodes ingested before this existed are filled in on the next run while every one of their comments still has its text (within 28 days of being fetched); after that they stay blank. The word list is `STOP` in `classify.py`.
 - **Requested guests.** For comments tagged Request the pipeline pulls out the name asked for ("Please have Serena Williams on next",
   "Мария, пригласи Опру Уинфри") and tallies it per episode. It is rule-based: runs of capitalised words minus cue words, Maria's
   names and the current guest; an all-lower-case comment is read only when it says "invite/have/bring X on". Each name counts once
