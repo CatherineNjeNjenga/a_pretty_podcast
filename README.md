@@ -160,6 +160,13 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   about the guest, `gap_words`), and `episode_summary.csv` shows each side's address share. It is a rough rule: the Maria / Guest / Both
   samples from `sample_neither.py` have a `your_mode` column so you can check it. Unnamed (she/her) and Host are split so the
   extreme-case line only gives the guest the she/her comments.
+- **Alias suggestions.** The pipeline looks in each episode's comments for words that may be another way of naming the guest: a
+  **spelling variant** (1-2 edits from an alias or the guest's name, used by 3+ comments, e.g. "ahsley") or a **distinctive word**
+  (in 5+ of the episode's comments but rare in the other episodes' comments still held, e.g. "giggler"; needs 200+ such comments
+  to compare against). Request comments are skipped. Nothing is added automatically: copy the good ones into `guest_aliases`
+  in `episodes.csv`. Output: `alias_suggestions.csv` and an ALIAS SUGGESTIONS section in the log. Suggestions are stored at ingest (words and
+  counts only) so they survive the text purge, and are refreshed each run for episodes whose text is all still held, so an alias you add
+  drops out of the list. Expect some noise, such as another person's name or a common word.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
