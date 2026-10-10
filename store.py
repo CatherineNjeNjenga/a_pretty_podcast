@@ -8,6 +8,8 @@ import os
 import sqlite3
 import requests
 
+BUILD = "2026-10-10.5"   # bumped with every release; run_weekly.py checks that all the files below carry the same value
+
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS episodes (
         video_id TEXT PRIMARY KEY, video_url TEXT, published TEXT, guest TEXT,
