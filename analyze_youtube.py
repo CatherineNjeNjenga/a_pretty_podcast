@@ -151,6 +151,8 @@ def per_episode(df, min_named=10):
     e["gap_likes"] = e["maria_likeshare"] - e["guest_likeshare"]
     # Counting Both for both sides cancels out of the gap (same as leaving Both out), so the real sensitivity check is focus:
     e["gap_focus"] = e["maria_share_focus"] - e["guest_share_focus"]   # Both assigned by focus
+    # Worst case for the "Maria is named more" claim: every Unnamed comment (she/her, host, presenter...) is really about the guest.
+    e["gap_unnamed_worst"] = e["gap_all"] - e["share_unnamed"]
     e["reliable"] = e["n_named"] >= min_named
     return e
 
@@ -175,7 +177,8 @@ def verdict(e):
     r = e[e["reliable"]]
     out = []
     for col, label in [("gap_all", "share of all comments"), ("gap_likes", "like-weighted share"),
-                       ("gap_focus", "sensitivity: Both comments assigned by focus")]:
+                       ("gap_focus", "sensitivity: Both comments assigned by focus"),
+                       ("gap_unnamed_worst", "extreme case: every Unnamed (she/her/host) comment given to the guest")]:
         x = r[col].dropna()
         n, k, p = sign_test(x)
         lo, hi = boot_ci(x)
@@ -305,6 +308,59 @@ def chart_requests_table(wide, top=10, last=8):
     fig.update_layout(title=dict(text=f"Most requested guests (top {len(t)}; latest {min(last, len(cols) - 1)} episodes shown)", x=0.02, font=dict(size=22)),
                       width=max(900, 120 * len(header) + 200), height=90 + 36 * (len(t) + 1) + 60, margin=dict(l=40, r=40, t=80, b=30))
     return fig
+
+
+def alias_audit(df, e=None, min_held=100):
+    """Check each guest's aliases against the comment text still held. Per alias: hits in its own episode and in all the other
+    episodes (per 1,000 comments). Flags: no hits in a well-covered episode (a missing nickname/spelling is likely elsewhere), a
+    very short alias, and an alias that matches as often in OTHER episodes (a common word or another person with that name).
+    Also lists the episode's stored top words, where a fan nickname that is not an alias tends to show up. Returns a DataFrame."""
+    h = df[df["comment"].notna()]
+    if h.empty:
+        return pd.DataFrame()
+    norm = h["comment"].map(lambda t: classify.variants(t)[0])
+    vid = h["video_id"].values
+    rows = []
+    kws = {}
+    if "keywords" in df:
+        import json
+        for v, raw in df.drop_duplicates("video_id")[["video_id", "keywords"]].values:
+            try:
+                kws[v] = ", ".join(k["w"] for k in json.loads(raw)[:8])
+            except Exception:
+                kws[v] = ""
+    for v, d in df.drop_duplicates("video_id").groupby("video_id"):
+        own = vid == v
+        n_own, n_oth = int(own.sum()), int((~own).sum())
+        if n_own == 0:
+            continue
+        for al in str(d["guest_aliases"].iloc[0]).split("|"):
+            al = al.strip()
+            rx = classify.alias_regex(al)
+            if not al or rx is None:
+                continue
+            hit = norm.map(lambda t: bool(rx.search(t))).values
+            oh, xh = int(hit[own].sum()), int(hit[~own].sum())
+            o_rate, x_rate = oh / n_own * 1000, (xh / n_oth * 1000 if n_oth else 0.0)
+            flags = []
+            if len(classify._strip(al).strip()) <= 3:
+                flags.append("very short alias")
+            if xh >= 5 and x_rate >= 0.5 * max(o_rate, 0.001):
+                flags.append("also matches other episodes (common word or another person?)")
+            rows.append({"episode_guest": d["guest"].iloc[0], "alias": al, "own_comments_held": n_own, "own_hits": oh,
+                         "own_per_1k": round(o_rate, 1), "other_comments_held": n_oth, "other_hits": xh,
+                         "other_per_1k": round(x_rate, 1), "flag": "; ".join(flags), "episode_top_words": kws.get(v, "")})
+    out = pd.DataFrame(rows)
+    if len(out):   # an unused spelling is harmless; the real warning is an episode where NO alias matched anything
+        tot = out.groupby("episode_guest")["own_hits"].transform("sum")
+        cov = out["own_comments_held"] >= min_held
+        out["flag"] = [("no alias matched anything in this episode; " if (t == 0 and c) else "") + f for t, c, f in zip(tot, cov, out["flag"])]
+        out["flag"] = out["flag"].str.rstrip("; ")
+    if e is not None and len(out) and "guest_share_all" in e:
+        med = e["guest_share_all"].median()
+        low = set(e.loc[e["guest_share_all"] < 0.5 * med, "guest"]) if med > 0 else set()
+        out["episode_note"] = out["episode_guest"].map(lambda g: "guest named far less often than the typical episode: look for missing nicknames" if g in low else "")
+    return out.sort_values(["flag", "episode_guest"], ascending=[False, True]) if len(out) else out
 
 
 def chart_fame(e):
