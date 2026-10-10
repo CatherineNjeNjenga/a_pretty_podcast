@@ -124,6 +124,14 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
 - **Doping topic list.** `kind=topic` rows in `work_terms.csv` (all `on=no` for now) set a separate `topic` flag ("doping") and
   never change the tag or the gap. Risky topic words count only in comments tagged Maria or Both. The verdict prints the
   share of comments carrying the flag next to the gap. Set `on` to yes to switch the list on.
+- **Audience measures** (independent of the tags, stored so they survive the text purge): per episode, the video's views, likes and
+  comment count read on snapshot day (`views`, `views_at`; 1 extra API unit), the number of distinct commenters (the commenter ids
+  are counted in memory and never stored), and per comment its posting time, writing system (`script`: latin / cyrillic / cjk /
+  other / none), word count and reply count. `episode_summary.csv` turns these into comments per 1,000 views (overall, naming
+  Maria, naming the guest), comments per commenter, Cyrillic share, median words, share of 30+ word comments, share of comments
+  that got replies, and share posted in the first 24 hours. Episodes finished before this existed get today's view count once
+  (`views_at` shows when); a count read more than 10 days after upload is not used in the per-1,000-views numbers or chart
+  (`comments_per_1k_views.png`), because older episodes have simply had longer to collect views.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
