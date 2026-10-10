@@ -146,6 +146,7 @@ def ingest(db, episodes, today):
         d["replies"] = pd.to_numeric(d["replies"], errors="coerce") if "replies" in d else None
         d = a.tag(a.score(d))            # score, then tag (Show needs the tone); tag + sentiment at ingest, so they survive the text purge
         kw = classify.keywords(d)         # candidates for the week's keyword, from text we still hold (counts only are stored)
+        req = classify.requested_names(d)  # which guests viewers ask for (names and counts only)
         d["likes"] = pd.to_numeric(d["likes"], errors="coerce").fillna(0).astype(int)
         rows = [(e["video_id"], r.comment_key, r.comment, int(r.likes), int(bool(r.is_reply)),
                  float(r.compound), r.about, today.isoformat(), classify.RULES_VERSION,
@@ -156,10 +157,13 @@ def ingest(db, episodes, today):
         db.executemany("INSERT OR IGNORE INTO comments "
                        "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at, rules_version, focus, work, topic, posted_at, script, words, replies) "
                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-        db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=?, authors=?, keywords=? WHERE video_id=?",
-                   (len(rows), today.isoformat(), authors, json.dumps(kw, ensure_ascii=False), e["video_id"]))
+        db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=?, authors=?, keywords=?, requested=? WHERE video_id=?",
+                   (len(rows), today.isoformat(), authors, json.dumps(kw, ensure_ascii=False),
+                    json.dumps(req, ensure_ascii=False), e["video_id"]))
         store_video_stats(db, e["video_id"], today)
         print(f"  KEYWORD CANDIDATES for {e['guest']}: " + (", ".join(f"{k['w']} ({k['n']}{', work' if k['kind'] == 'work' else ''})" for k in kw[:5]) or "none reached 3 comments"))
+        print(f"  REQUESTED GUESTS in {e['guest']}'s comments: {req['named']} of {req['total']} requests named someone"
+              + (": " + ", ".join(f"{x['name']} ({x['n']})" for x in req["names"][:5]) if req["names"] else ""))
         print(f"  {e['video_id']}: stored {len(rows)} comments from {authors if authors is not None else '?'} distinct commenters")
         done += 1
     return done
@@ -185,6 +189,64 @@ def backfill_video_stats(db, today):
     kept in views_at; counts taken long after upload are not used in the per-1,000-views chart."""
     for r in db.execute("SELECT video_id FROM episodes WHERE status='done' AND views_at IS NULL"):
         store_video_stats(db, r["video_id"], today)
+
+
+def backfill_requests(db):
+    """Episodes finished before this existed: work out the requested names, but only when every comment of the episode still has
+    its text (otherwise the tally would be partial and misleading)."""
+    eps = db.execute("""SELECT e.video_id, e.guest, e.guest_aliases FROM episodes e
+                        WHERE e.status='done' AND e.requested IS NULL
+                          AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.video_id=e.video_id AND c.text IS NULL)
+                          AND EXISTS (SELECT 1 FROM comments c WHERE c.video_id=e.video_id)""")
+    for e in eps:
+        d = pd.DataFrame(db.execute("SELECT text AS comment FROM comments WHERE video_id=?", (e["video_id"],)))
+        d["guest"], d["guest_aliases"] = e["guest"], e["guest_aliases"]
+        d["video_id"] = e["video_id"]
+        d["about"] = classify.classify(d)
+        db.execute("UPDATE episodes SET requested=? WHERE video_id=?",
+                   (json.dumps(classify.requested_names(d), ensure_ascii=False), e["video_id"]))
+        print(f"  {e['guest']}: requested guests filled in from the comments still held")
+
+
+def request_tables(df):
+    """Per-episode tally of requested guests. Returns (long, wide): long has one row per episode and name with this episode's
+    count, the running total up to and including it (episodes in publish order) and the name's overall rank; wide has one row
+    per name and one column per episode. Names are merged across episodes (same spelling rules as within an episode)."""
+    eps = df.drop_duplicates("video_id").sort_values("published")
+    per = []
+    for r in eps.itertuples():
+        try:
+            j = json.loads(r.requested) if isinstance(r.requested, str) else None
+        except Exception:
+            j = None
+        if j is not None:
+            per.append((r.guest, r.published, {x["name"]: x["n"] for x in j["names"]}, j["total"], j["named"]))
+    if not per:
+        return None, None
+    allc = {}
+    for _, _, c, _, _ in per:
+        for k, v in c.items():
+            allc[k] = allc.get(k, 0) + v
+    _, disp = classify.merge_names(allc, with_map=True)   # every stored spelling -> its merged display name
+    running, rows = {}, []
+    for guest, pub, c, total, named in per:
+        here = {}
+        for k, v in c.items():
+            here[disp[k]] = here.get(disp[k], 0) + v
+        for n, v in here.items():
+            running[n] = running.get(n, 0) + v
+        for n in sorted(running, key=lambda x: -running[x]):
+            rows.append({"episode_guest": guest, "published": pub, "requested_name": n,
+                         "mentions_this_episode": here.get(n, 0), "running_total": running[n],
+                         "requests_in_episode": total, "requests_naming_someone": named})
+    long = pd.DataFrame(rows)
+    rank = long.groupby("requested_name")["running_total"].max().rank(ascending=False, method="min").astype(int)
+    long["overall_rank"] = long["requested_name"].map(rank)
+    wide = long.pivot_table(index="requested_name", columns="episode_guest", values="mentions_this_episode", aggfunc="sum", fill_value=0)
+    wide = wide[[g for g, *_ in per if g in wide.columns]]
+    wide.insert(0, "total", wide.sum(axis=1))
+    wide = wide.sort_values("total", ascending=False)
+    return long[long["mentions_this_episode"] > 0].sort_values(["published", "mentions_this_episode"], ascending=[True, False]), wide
 
 
 def purge_old_text(db, today):
@@ -233,7 +295,7 @@ def load_all(db):
                   c.work AS stored_work, c.topic AS stored_topic, c.rules_version,
                   c.posted_at, c.script AS stored_script, c.words AS stored_words, c.replies,
                   e.guest, e.guest_aliases, e.guest_tier, e.published,
-                  e.views, e.video_likes, e.video_comments, e.views_at, e.authors, e.keywords
+                  e.views, e.video_likes, e.video_comments, e.views_at, e.authors, e.keywords, e.requested
            FROM comments c JOIN episodes e USING (video_id) WHERE e.status='done'"""))
     if c.empty:
         return c
@@ -314,6 +376,7 @@ def main():
     n_new = ingest(db, todo, today)
     retag_stored(db)
     backfill_video_stats(db, today)
+    backfill_requests(db)
     purge_old_text(db, today)
 
     if n_new == 0 and not args.force:
@@ -341,6 +404,18 @@ def main():
     df[["video_id", "guest", "published", "likes", "is_reply", "about", "focus", "work", "topic", "compound", "rules_version", "posted_at", "script", "words", "replies"]].to_csv(
         f"{args.out}/tagged_comments.csv", index=False)
     e.to_csv(f"{args.out}/episode_summary.csv", index=False)
+    req_long, req_wide = request_tables(df)
+    if req_long is not None and len(req_wide):
+        req_long.to_csv(f"{args.out}/guest_requests.csv", index=False)
+        req_wide.to_csv(f"{args.out}/guest_requests_table.csv")
+        try:
+            fig = a.chart_requests_table(req_wide)
+            if fig is not None:
+                fig.write_image(f"{args.out}/guest_requests_table.png", scale=2)
+        except Exception as ex:      # the table picture is a convenience; the CSVs above are the data
+            print(f"(could not draw guest_requests_table.png: {ex})")
+        print("\nMOST REQUESTED GUESTS SO FAR (all tallied episodes): " +
+              ", ".join(f"{n} ({int(t)})" for n, t in req_wide["total"].head(10).items()))
 
     lines = record_metrics(db, today, e)
     if lines:
