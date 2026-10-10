@@ -99,7 +99,7 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   **Request** (asks for a guest, English and Russian; wins over any name, so "Мария, пригласи X" is not counted as
   engagement with Maria), **Maria / Guest / Both** (names, including Russian and Chinese spellings, accents and stretched
   letters like "Lindseeeyyy"), **Show** (judges the show or episode), **Pair** (about both hosts, no names: "two queens"),
-  **Unnamed** (she/her or a role like presenter, no name), **Reaction** (emoji-only or a short feeling like "Congratulations!"),
+  **Unnamed** (she/her, no name; leans guest), **Host** (host/presenter/interviewer, no name; leans Maria), **Reaction** (emoji-only or a short feeling like "Congratulations!"),
   **Work** (no name, but mentions Maria's or the guest's business, book or organisation from `work_terms.csv`),
   **Topic** (readable comment about the subject, 5+ words) and **Neither** (the rest).
 - Only Maria, Guest and Both enter the Maria-vs-guest gap. The tone score is not used for tagging (it scores 0 on emoji,
@@ -154,6 +154,12 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   that matches everywhere is a common word or another person), very short aliases, episodes where no alias matched at all, guests
   named far less than the typical episode, and the episode's top words (a fan nickname that is not yet an alias shows up there).
   It only sees comments within the 28-day window.
+- **Address vs discussion.** Every Maria, Guest and Both comment also gets a `mode`: **address** (15 words or fewer, thank/praise or
+  second-person wording, no she/her/he/they: "Thanks Maria!", "Zoe you were amazing") or **discussion** (everything else). The verdict
+  adds a line for the gap among discussion comments only, a depth-weighted line (share of all words written about Maria minus
+  about the guest, `gap_words`), and `episode_summary.csv` shows each side's address share. It is a rough rule: the Maria / Guest / Both
+  samples from `sample_neither.py` have a `your_mode` column so you can check it. Unnamed (she/her) and Host are split so the
+  extreme-case line only gives the guest the she/her comments.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
