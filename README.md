@@ -147,6 +147,13 @@ YouTube's developer policies allow storing public comment data for at most 30 ca
   `requests_naming_someone` in `episode_summary.csv`, and a log line per new episode. Episodes whose text has already been purged
   have no tally (it is filled in only when every comment of the episode is still held), so the table builds up from new episodes.
   Names are typed by viewers, so skim the table before quoting it; a missed or wrongly split name is always possible.
+- **Bias checks.** (1) The verdict has an "extreme case" line that gives every Unnamed comment (she/her, host, presenter) to the guest
+  (`gap_unnamed_worst`): if Maria still leads there, the lead does not depend on how those comments are read. Unnamed also holds
+  "host" words, which are really about Maria, so this is a deliberately extreme bound. (2) `alias_audit.csv` and the log's ALIAS
+  AUDIT section check each guest alias against the comment text still held: hits in its own episode versus other episodes (a word
+  that matches everywhere is a common word or another person), very short aliases, episodes where no alias matched at all, guests
+  named far less than the typical episode, and the episode's top words (a fan nickname that is not yet an alias shows up there).
+  It only sees comments within the 28-day window.
 - Add misspellings and nicknames to `guest_aliases` (e.g. "giggler", "jinny bass"); the rules do not guess typos.
 - Each run re-tags stored comments whose text is still held, so changing a rule or alias applies to everything from
   the last 28 days; comments whose text is already purged keep the tag they had.
