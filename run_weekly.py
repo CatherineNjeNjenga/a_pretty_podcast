@@ -135,22 +135,53 @@ def ingest(db, episodes, today):
         d["comment_key"] = d["comment_id"].astype(str) if has_id else d["comment"].apply(
             lambda t: hashlib.sha1((e["video_id"] + t).encode()).hexdigest())
         d = d.drop_duplicates("comment_key")
+        authors = int(d["author"].nunique()) if "author" in d and d["author"].notna().any() else None
+        d = d.drop(columns=["author"], errors="ignore")      # commenter ids are counted, never stored
         d["guest_aliases"] = e["guest_aliases"]
         d["guest"] = e["guest"]
+        d["posted_at"] = d["date"].astype(str).where(d["date"].notna(), None) if "date" in d else None
+        d["script"] = d["comment"].apply(classify.script_of)
+        d["words"] = d["comment"].apply(classify.n_words)
+        d["replies"] = pd.to_numeric(d["replies"], errors="coerce") if "replies" in d else None
         d = a.tag(a.score(d))            # score, then tag (Show needs the tone); tag + sentiment at ingest, so they survive the text purge
         d["likes"] = pd.to_numeric(d["likes"], errors="coerce").fillna(0).astype(int)
         rows = [(e["video_id"], r.comment_key, r.comment, int(r.likes), int(bool(r.is_reply)),
                  float(r.compound), r.about, today.isoformat(), classify.RULES_VERSION,
                  r.focus if isinstance(r.focus, str) else None,
-                 r.work if isinstance(r.work, str) else None, r.topic if isinstance(r.topic, str) else None) for r in d.itertuples()]
+                 r.work if isinstance(r.work, str) else None, r.topic if isinstance(r.topic, str) else None,
+                 r.posted_at if isinstance(r.posted_at, str) else None, r.script, int(r.words),
+                 int(r.replies) if pd.notna(r.replies) else None) for r in d.itertuples()]
         db.executemany("INSERT OR IGNORE INTO comments "
-                       "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at, rules_version, focus, work, topic) "
-                       "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-        db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=? WHERE video_id=?",
-                   (len(rows), today.isoformat(), e["video_id"]))
-        print(f"  {e['video_id']}: stored {len(rows)} comments")
+                       "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at, rules_version, focus, work, topic, posted_at, script, words, replies) "
+                       "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+        db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=?, authors=? WHERE video_id=?",
+                   (len(rows), today.isoformat(), authors, e["video_id"]))
+        store_video_stats(db, e["video_id"], today)
+        print(f"  {e['video_id']}: stored {len(rows)} comments from {authors if authors is not None else '?'} distinct commenters")
         done += 1
     return done
+
+
+def store_video_stats(db, vid, today):
+    """Views / likes / comment count of the video as of today (the snapshot day), so engagement can be put per 1,000 views.
+    A failure here never blocks the run; views_at records the date so the age of the count is always known."""
+    if os.environ.get("COMMENT_SOURCE") == "apify":
+        return
+    try:
+        import youtube_api
+        s = youtube_api.video_stats(vid)
+    except Exception as ex:
+        print(f"  {vid}: could not read video statistics ({ex}); will try again on a later run")
+        return
+    db.execute("UPDATE episodes SET views=?, video_likes=?, video_comments=?, views_at=? WHERE video_id=?",
+               (s["views"], s["video_likes"], s["video_comments"], today.isoformat(), vid))
+
+
+def backfill_video_stats(db, today):
+    """Episodes finished before views were stored (or whose first read failed): read the current counts once. The date is
+    kept in views_at; counts taken long after upload are not used in the per-1,000-views chart."""
+    for r in db.execute("SELECT video_id FROM episodes WHERE status='done' AND views_at IS NULL"):
+        store_video_stats(db, r["video_id"], today)
 
 
 def purge_old_text(db, today):
@@ -166,7 +197,7 @@ def retag_stored(db):
     """Re-tag comments whose text is still stored (so rule, alias or work-term changes apply), refresh their Both-focus, Work flag
     and doping flag and stamp them with the current rules version. Comments whose text is already purged keep what they had."""
     rows = db.execute("""SELECT c.video_id, c.comment_key, c.text AS comment, c.compound, c.about AS old,
-                                c.focus AS oldfocus, c.work AS oldwork, c.topic AS oldtopic, c.rules_version AS ver,
+                                c.focus AS oldfocus, c.work AS oldwork, c.topic AS oldtopic, c.rules_version AS ver, c.script, c.words,
                                 e.guest, e.guest_aliases
                          FROM comments c JOIN episodes e USING (video_id) WHERE c.text IS NOT NULL""")
     if not rows:
@@ -181,6 +212,10 @@ def retag_stored(db):
         d["new" + k] = pd.Series(t[k].values).fillna("").astype(str).values
     changed = (d["new"] != d["old"]) | (d["newfocus"] != d["oldfocus"]) | (d["newwork"] != d["oldwork"]) | (d["newtopic"] != d["oldtopic"])
     todo = d[changed | (d["ver"] != classify.RULES_VERSION)]
+    if len(todo) or d["script"].isna().any() or d["words"].isna().any():
+        db.executemany("UPDATE comments SET script=?, words=? WHERE video_id=? AND comment_key=? AND (script IS NULL OR words IS NULL)",
+                       [(classify.script_of(r.comment), classify.n_words(r.comment), r.video_id, r.comment_key)
+                        for r in d.itertuples() if pd.isna(r.script) or pd.isna(r.words)])
     if len(todo):
         db.executemany("UPDATE comments SET about=?, focus=?, work=?, topic=?, rules_version=? WHERE video_id=? AND comment_key=?",
                        [(r.new, r.newfocus or None, r.newwork or None, r.newtopic or None, classify.RULES_VERSION,
@@ -193,7 +228,9 @@ def load_all(db):
     c = pd.DataFrame(db.execute(
         """SELECT c.video_id, c.text AS comment, c.likes, c.is_reply, c.compound, c.about AS stored_about, c.focus AS stored_focus,
                   c.work AS stored_work, c.topic AS stored_topic, c.rules_version,
-                  e.guest, e.guest_aliases, e.guest_tier, e.published
+                  c.posted_at, c.script AS stored_script, c.words AS stored_words, c.replies,
+                  e.guest, e.guest_aliases, e.guest_tier, e.published,
+                  e.views, e.video_likes, e.video_comments, e.views_at, e.authors
            FROM comments c JOIN episodes e USING (video_id) WHERE e.status='done'"""))
     if c.empty:
         return c
@@ -205,7 +242,11 @@ def load_all(db):
         t = a.tag(c[has_text].copy())
         for k in ("about", "focus", "work", "topic"):
             c.loc[has_text, k] = t[k].values
-    return c.drop(columns=["stored_" + k for k in ("about", "focus", "work", "topic")])
+    c["script"], c["words"] = c["stored_script"], c["stored_words"]
+    if has_text.any():
+        c.loc[has_text, "script"] = c.loc[has_text, "comment"].apply(classify.script_of)
+        c.loc[has_text, "words"] = c.loc[has_text, "comment"].apply(classify.n_words)
+    return c.drop(columns=["stored_" + k for k in ("about", "focus", "work", "topic", "script", "words")])
 
 
 def cumulative(e, min_k=3):
@@ -269,6 +310,7 @@ def main():
     print(f"{len(todo)} episode(s) due for a snapshot")
     n_new = ingest(db, todo, today)
     retag_stored(db)
+    backfill_video_stats(db, today)
     purge_old_text(db, today)
 
     if n_new == 0 and not args.force:
@@ -293,7 +335,7 @@ def main():
               "(see rules_versions in episode_summary.csv).")
     os.makedirs(args.out, exist_ok=True)
     # Exports contain no comment text and no usernames: only derived fields.
-    df[["video_id", "guest", "published", "likes", "is_reply", "about", "focus", "work", "topic", "compound", "rules_version"]].to_csv(
+    df[["video_id", "guest", "published", "likes", "is_reply", "about", "focus", "work", "topic", "compound", "rules_version", "posted_at", "script", "words", "replies"]].to_csv(
         f"{args.out}/tagged_comments.csv", index=False)
     e.to_csv(f"{args.out}/episode_summary.csv", index=False)
 
@@ -312,6 +354,9 @@ def main():
     if not cum.empty:
         cum.to_csv(f"{args.out}/cumulative.csv", index=False)
         figs.append(("cumulative_gap", chart_cumulative(cum)))
+    eng = a.chart_engagement(e)
+    if eng is not None:
+        figs.append(("comments_per_1k_views", eng))
     fame = a.chart_fame(e)
     if fame is not None:
         figs.append(("guest_fame_vs_gap", fame))
