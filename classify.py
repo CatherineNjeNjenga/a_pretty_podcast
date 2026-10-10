@@ -89,6 +89,12 @@ def work_terms(path=None):
     return out
 
 
+def guests_without_terms(guests):
+    """Guest names (from episodes) that have no active Work-term rows in work_terms.csv, in the order given."""
+    have = work_terms()["guests"]
+    return [g for g in dict.fromkeys(guests) if g and _strip(g).strip() not in have]
+
+
 def _work_flags(vs, about, guest_key):
     """(work side or None, True if a non-risky Work term matched, topic flag or None)."""
     wt = work_terms()
