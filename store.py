@@ -15,7 +15,7 @@ SCHEMA = [
         n_comments INTEGER, snapshot_at TEXT)""",
     """CREATE TABLE IF NOT EXISTS comments (
         video_id TEXT, comment_key TEXT, text TEXT, likes INTEGER, is_reply INTEGER,
-        compound REAL, about TEXT, fetched_at TEXT, rules_version TEXT, focus TEXT, PRIMARY KEY (video_id, comment_key))""",
+        compound REAL, about TEXT, fetched_at TEXT, rules_version TEXT, focus TEXT, work TEXT, topic TEXT, PRIMARY KEY (video_id, comment_key))""",
     """CREATE TABLE IF NOT EXISTS weekly_metrics (
         run_date TEXT PRIMARY KEY, n_episodes INTEGER, mean_gap_all REAL, ci_lo REAL,
         ci_hi REAL, mean_gap_likes REAL, sign_p REAL, maria_ahead INTEGER)""",
@@ -107,7 +107,7 @@ def connect():
         have = [r["name"] for r in db.execute("PRAGMA table_info(comments)")]
     except Exception:
         have = []   # PRAGMA not answered: try the ALTERs below, a duplicate-column error just means it exists
-    for col in ("rules_version", "focus"):
+    for col in ("rules_version", "focus", "work", "topic"):
         if col not in have:
             try:
                 db.execute(f"ALTER TABLE comments ADD COLUMN {col} TEXT")
