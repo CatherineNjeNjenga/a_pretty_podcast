@@ -450,6 +450,13 @@ def main():
     for name, fig in figs:
         fig.write_image(f"{args.out}/{name}.png", scale=2)
         print("wrote", f"{args.out}/{name}.png")
+        try:                                       # interactive copy (hover, zoom) for the public page
+            fig.write_html(f"{args.out}/{name}.html", include_plotlyjs="cdn")
+        except Exception as ex:
+            print(f"(no interactive version of {name}: {ex})")
+    with open(f"{args.out}/run_info.json", "w", encoding="utf-8") as f:
+        json.dump({"run_date": today.isoformat(), "n_episodes": int(e["video_id"].nunique()),
+                   "rules_versions": sorted(df["rules_version"].fillna("pre-versioning").unique().tolist())}, f)
     set_output("new_data", "true")
 
 
