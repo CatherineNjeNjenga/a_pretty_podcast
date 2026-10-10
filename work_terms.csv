@@ -1,0 +1,41 @@
+scope,guest,term,kind,risky,on,note
+maria,,sugarpova,business,no,yes,Maria's candy brand
+maria,,wta,organisation,yes,yes,also appears in general tennis chat
+maria,,unstoppable,book,yes,yes,Maria's memoir; also an ordinary word so risky
+maria,,meldonium,topic,no,no,safe: specific to Maria
+maria,,doping,topic,yes,no,also used for other athletes; matched only with Maria's name or when addressed to her
+maria,,dopper,topic,yes,no,same
+maria,,drug cheater,topic,yes,no,same
+maria,,cheater,topic,yes,no,same
+maria,,suspension,topic,yes,no,same
+guest,Zoe Saldaña,avatar,film,yes,yes,Zoe starred in the film series
+guest,Zoe Saldaña,star trek,film,yes,yes,Zoe starred in the film series
+guest,Zoe Saldaña,guardians of the galaxy,film,yes,yes,Zoe starred in the film series
+guest,Jeanie Buss,lakers,organisation,yes,yes,also basketball chatter
+guest,Jeanie Buss,nba,organisation,yes,yes,also basketball chatter
+guest,Gabriela Hearst,gabriela hearst,business,no,yes,Gabi's eponymous label 
+guest,Willow Bay,angel city fc,organisation,yes,yes,Willow is a co-owner so can make refernce to other individuals too
+guest,Willow Bay,usc annenberg,organisation,yes,yes,Willow is the dean a position that she can exit in future
+guest,Chelsea Handler,comedy,profession,yes,yes,Chelsea is a stand-up comedian
+guest,Dr. Becky Kennedy,good inside,business,no,yes,Dr. Becky's online parenting advice service
+guest,Dr. Becky Kennedy,good inside,book,no,yes,Dr. Becky's parenting advice book
+guest,Dr. Becky Kennedy,good inside,podcast,no,yes,Dr. Becky's parenting advice podcast
+guest,Ashley Graham,a new model,book,no,yes,Ashley's memoir
+guest,Amy Astley,architectural digest,organisation,yes,yes,Amy is the editor-in-chief of the international design magazine
+guest,Amy Astley,teen vogue,organisation,yes,yes,Amy is the founding editor of the online pubication magazine
+guest,Christine Dorfler,nfl,organisation,yes,yes,Christine is the CFO of NFL
+guest,Misty Copeland,ballerina,profession,yes,yes,Misty was the first African American to be promoted to principal dancer
+guest,Misty Copeland,life in motion,book,no,yes,Misty's memoir
+guest,Susie Wolff,f1,organisation,yes,yes,Susie is the Managing Director of F1 Academy
+guest,Delphine Bellini,schiaparelli,business,yes,yes,Delphine is the CEO of Maison Schiaparelli
+guest,Malala Yousafzai,malala fund,organisation,no,yes,Malala is the co-founder of Malala Fund
+guest,Malala Yousafzai,nobel peace price,organisation,yes,yes,Malala was the oungest-ever Nobel Peace Prize laureate in 2014 
+guest,Malala Yousafzai,i am malala,book,no,yes,Malala's memoir
+guest,Marie-Louise Sciò,pellicano group,organisation,yes,yes,Marie is the CEO and creative director of Pellicano Group
+guest,Lindsey Vonn,olympic,organisation,yes,yes,Lindsey is an Olympic ski racer
+guest,Hannah Berner,giggly squad,business,yes,yes,Hannah co-hosts giggly squad with her best friend Paige DeSorbo
+guest,Jenna Lyons,j crew,business,no,yes,also write jcrew / j.crew
+guest,Jenna Lyons,loveseen,business,no,yes,Jenna's beauty product buisness
+guest,Emmy Rossum,shameless,show,yes,yes,also an ordinary adjective
+guest,Carolyn Murphy,vogue,organisation,yes,yes,a well known fashion magazine
+guest,Christina Tosi,milk bar,business,no,yes,Christina's dessert company
