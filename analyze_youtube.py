@@ -79,6 +79,16 @@ def _kw_text(raw):
         return ""
 
 
+def _req_cols(raw):
+    import json
+    try:
+        j = json.loads(raw)
+        return {"requests_total": j["total"], "requests_naming_someone": j["named"],
+                "requested_top": ", ".join(f"{x['name']} ({x['n']})" for x in j["names"][:5])}
+    except Exception:
+        return {"requests_total": np.nan, "requests_naming_someone": np.nan, "requested_top": ""}
+
+
 def _engagement(d, mar, gst):
     """Reach and depth measures that do not depend on the Maria/guest tags."""
     n = len(d)
@@ -116,6 +126,7 @@ def per_episode(df, min_named=10):
         gst_f = (d["about"] == "Guest") | (both & (foc != "Maria"))      # ...and for the guest unless it is Maria-focused
         eng = _engagement(d, mar, gst)
         eng["keywords"] = _kw_text(_col(d, "keywords").iloc[0])
+        eng.update(_req_cols(_col(d, "requested").iloc[0]))
         rows.append({
             **eng,
             "video_id": vid, "guest": d["guest"].iloc[0], "guest_tier": d.get("guest_tier", pd.Series([np.nan])).iloc[0],
@@ -275,6 +286,24 @@ def chart_engagement(e):
     fig.update_layout(barmode="group")
     fig.update_xaxes(title_text="Comments per 1,000 views", gridcolor=GRID)
     fig.update_yaxes(title_text="", autorange="reversed")
+    return fig
+
+
+def chart_requests_table(wide, top=10, last=8):
+    """Picture of the requested-guest tally: top names, overall total, then the most recent episodes (full table is in the CSV)."""
+    if wide is None or wide.empty:
+        return None
+    t = wide.head(top)
+    cols = ["total"] + [c for c in t.columns if c != "total"][-last:]
+    t = t[cols]
+    header = ["Requested guest"] + ["All episodes" if c == "total" else c for c in cols]
+    cells = [list(t.index)] + [t[c].astype(int).tolist() for c in cols]
+    fig = go.Figure(go.Table(
+        header=dict(values=header, fill_color="#E9E9E9", align="left", font=dict(size=13, color="#222222"), height=34),
+        cells=dict(values=cells, align=["left"] + ["right"] * len(cols), fill_color="#FFFFFF", font=dict(size=13, color="#222222"), height=30,
+                   line_color="#DDDDDD")))
+    fig.update_layout(title=dict(text=f"Most requested guests (top {len(t)}; latest {min(last, len(cols) - 1)} episodes shown)", x=0.02, font=dict(size=22)),
+                      width=max(900, 120 * len(header) + 200), height=90 + 36 * (len(t) + 1) + 60, margin=dict(l=40, r=40, t=80, b=30))
     return fig
 
 
