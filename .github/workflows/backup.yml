@@ -1,0 +1,40 @@
+name: pretty-tough-backup
+
+on:
+  schedule:
+    - cron: "0 5 1 * *"      # 05:00 UTC on the 1st of every month
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pretty-tough          # same group as the weekly run, so a backup never reads half-written data
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pandas requests
+
+      - name: Export the database
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: python backup_export.py --out backup
+
+      - name: Upload backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: pretty-tough-backup-${{ github.run_id }}
+          path: backup/
+          retention-days: 90
