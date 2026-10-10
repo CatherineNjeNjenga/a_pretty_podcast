@@ -146,6 +146,7 @@ def ingest(db, episodes, today):
         d["replies"] = pd.to_numeric(d["replies"], errors="coerce") if "replies" in d else None
         d = a.tag(a.score(d))            # score, then tag (Show needs the tone); tag + sentiment at ingest, so they survive the text purge
         kw = classify.keywords(d)         # candidates for the week's keyword, from text we still hold (counts only are stored)
+        sug = classify.alias_suggestions(d, background_texts(db, e["video_id"]))   # possible extra guest aliases (you approve them)
         req = classify.requested_names(d)  # which guests viewers ask for (names and counts only)
         d["likes"] = pd.to_numeric(d["likes"], errors="coerce").fillna(0).astype(int)
         rows = [(e["video_id"], r.comment_key, r.comment, int(r.likes), int(bool(r.is_reply)),
@@ -158,9 +159,9 @@ def ingest(db, episodes, today):
         db.executemany("INSERT OR IGNORE INTO comments "
                        "(video_id, comment_key, text, likes, is_reply, compound, about, fetched_at, rules_version, focus, work, topic, mode, posted_at, script, words, replies) "
                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-        db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=?, authors=?, keywords=?, requested=? WHERE video_id=?",
+        db.execute("UPDATE episodes SET status='done', n_comments=?, snapshot_at=?, authors=?, keywords=?, requested=?, alias_suggestions=? WHERE video_id=?",
                    (len(rows), today.isoformat(), authors, json.dumps(kw, ensure_ascii=False),
-                    json.dumps(req, ensure_ascii=False), e["video_id"]))
+                    json.dumps(req, ensure_ascii=False), json.dumps(sug, ensure_ascii=False), e["video_id"]))
         store_video_stats(db, e["video_id"], today)
         print(f"  KEYWORD CANDIDATES for {e['guest']}: " + (", ".join(f"{k['w']} ({k['n']}{', work' if k['kind'] == 'work' else ''})" for k in kw[:5]) or "none reached 3 comments"))
         print(f"  REQUESTED GUESTS in {e['guest']}'s comments: {req['named']} of {req['total']} requests named someone"
@@ -190,6 +191,30 @@ def backfill_video_stats(db, today):
     kept in views_at; counts taken long after upload are not used in the per-1,000-views chart."""
     for r in db.execute("SELECT video_id FROM episodes WHERE status='done' AND views_at IS NULL"):
         store_video_stats(db, r["video_id"], today)
+
+
+def background_texts(db, exclude_vid, limit=20000):
+    """Comment text of the OTHER episodes that is still held (a random sample), used to tell which words are special to one episode."""
+    try:
+        return [r["text"] for r in db.execute("SELECT text FROM comments WHERE text IS NOT NULL AND video_id != ? "
+                                              "ORDER BY random() LIMIT ?", (exclude_vid, limit))]
+    except Exception:
+        return None
+
+
+def refresh_alias_suggestions(db):
+    """Every run: recompute suggestions for episodes whose comments are ALL still held, so a freshly added alias drops out of the
+    list. Episodes whose text is partly purged keep the list stored at ingest."""
+    eps = db.execute("""SELECT e.video_id, e.guest, e.guest_aliases FROM episodes e
+                        WHERE e.status='done'
+                          AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.video_id=e.video_id AND c.text IS NULL)
+                          AND EXISTS (SELECT 1 FROM comments c WHERE c.video_id=e.video_id)""")
+    for e in eps:
+        d = pd.DataFrame(db.execute("SELECT text AS comment FROM comments WHERE video_id=?", (e["video_id"],)))
+        d["guest"], d["guest_aliases"], d["video_id"] = e["guest"], e["guest_aliases"], e["video_id"]
+        d["about"] = classify.classify(d)
+        db.execute("UPDATE episodes SET alias_suggestions=? WHERE video_id=?",
+                   (json.dumps(classify.alias_suggestions(d, background_texts(db, e["video_id"])), ensure_ascii=False), e["video_id"]))
 
 
 def backfill_requests(db):
@@ -296,7 +321,7 @@ def load_all(db):
                   c.work AS stored_work, c.topic AS stored_topic, c.mode AS stored_mode, c.rules_version,
                   c.posted_at, c.script AS stored_script, c.words AS stored_words, c.replies,
                   e.guest, e.guest_aliases, e.guest_tier, e.published,
-                  e.views, e.video_likes, e.video_comments, e.views_at, e.authors, e.keywords, e.requested
+                  e.views, e.video_likes, e.video_comments, e.views_at, e.authors, e.keywords, e.requested, e.alias_suggestions
            FROM comments c JOIN episodes e USING (video_id) WHERE e.status='done'"""))
     if c.empty:
         return c
@@ -378,6 +403,7 @@ def main():
     retag_stored(db)
     backfill_video_stats(db, today)
     backfill_requests(db)
+    refresh_alias_suggestions(db)
     purge_old_text(db, today)
 
     if n_new == 0 and not args.force:
@@ -413,6 +439,12 @@ def main():
               f"{int(df['comment'].notna().sum())} comments)")
         for r in bad.head(12).itertuples():
             print(f"  - {r.episode_guest} / '{r.alias}': {r.flag or r.episode_note}")
+    sugg = a.alias_suggestion_table(df)
+    if len(sugg):
+        sugg.to_csv(f"{args.out}/alias_suggestions.csv", index=False)
+        print(f"\nALIAS SUGGESTIONS (copy the good ones into guest_aliases in episodes.csv): {len(sugg)} word(s), see alias_suggestions.csv")
+        for g, d in sugg.groupby("episode_guest", sort=False):
+            print(f"  - {g}: " + ", ".join(f"{r.suggested_word} ({r.comments_using_it})" for r in d.head(4).itertuples()))
     req_long, req_wide = request_tables(df)
     if req_long is not None and len(req_wide):
         req_long.to_csv(f"{args.out}/guest_requests.csv", index=False)
