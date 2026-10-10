@@ -12,10 +12,12 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS episodes (
         video_id TEXT PRIMARY KEY, video_url TEXT, published TEXT, guest TEXT,
         guest_aliases TEXT, guest_tier INTEGER, status TEXT DEFAULT 'pending',
-        n_comments INTEGER, snapshot_at TEXT)""",
+        n_comments INTEGER, snapshot_at TEXT, views INTEGER, video_likes INTEGER, video_comments INTEGER,
+        views_at TEXT, authors INTEGER)""",
     """CREATE TABLE IF NOT EXISTS comments (
         video_id TEXT, comment_key TEXT, text TEXT, likes INTEGER, is_reply INTEGER,
-        compound REAL, about TEXT, fetched_at TEXT, rules_version TEXT, focus TEXT, work TEXT, topic TEXT, PRIMARY KEY (video_id, comment_key))""",
+        compound REAL, about TEXT, fetched_at TEXT, rules_version TEXT, focus TEXT, work TEXT, topic TEXT,
+        posted_at TEXT, script TEXT, words INTEGER, replies INTEGER, PRIMARY KEY (video_id, comment_key))""",
     """CREATE TABLE IF NOT EXISTS weekly_metrics (
         run_date TEXT PRIMARY KEY, n_episodes INTEGER, mean_gap_all REAL, ci_lo REAL,
         ci_hi REAL, mean_gap_likes REAL, sign_p REAL, maria_ahead INTEGER)""",
@@ -103,17 +105,22 @@ def connect():
     for stmt in SCHEMA:
         db.execute(stmt)
     # Databases created before these columns existed: add them (old rows stay NULL).
-    try:
-        have = [r["name"] for r in db.execute("PRAGMA table_info(comments)")]
-    except Exception:
-        have = []   # PRAGMA not answered: try the ALTERs below, a duplicate-column error just means it exists
-    for col in ("rules_version", "focus", "work", "topic"):
-        if col not in have:
-            try:
-                db.execute(f"ALTER TABLE comments ADD COLUMN {col} TEXT")
-                print(f"Added comments.{col} column")
-            except Exception as ex:
-                if "duplicate column" not in str(ex).lower():
-                    raise
+    NEW = {"comments": [("rules_version", "TEXT"), ("focus", "TEXT"), ("work", "TEXT"), ("topic", "TEXT"), ("posted_at", "TEXT"),
+                        ("script", "TEXT"), ("words", "INTEGER"), ("replies", "INTEGER")],
+           "episodes": [("views", "INTEGER"), ("video_likes", "INTEGER"), ("video_comments", "INTEGER"),
+                        ("views_at", "TEXT"), ("authors", "INTEGER")]}
+    for table, cols in NEW.items():
+        try:
+            have = [r["name"] for r in db.execute(f"PRAGMA table_info({table})")]
+        except Exception:
+            have = []   # PRAGMA not answered: try the ALTERs below, a duplicate-column error just means it exists
+        for col, typ in cols:
+            if col not in have:
+                try:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+                    print(f"Added {table}.{col} column")
+                except Exception as ex:
+                    if "duplicate column" not in str(ex).lower():
+                        raise
     print("Storage:", where)
     return db
