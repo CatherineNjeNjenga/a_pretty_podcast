@@ -43,10 +43,12 @@ def _key(api_key):
 
 
 def _row(video_id, item_id, sn, is_reply, reply_count=None):
-    # Author names are deliberately not collected.
+    # Author names are deliberately not collected. The channel id is used in memory only, to count distinct commenters per
+    # episode (run_weekly.py stores that count and drops the column); it is never written to the database.
     return {"video_id": video_id, "video_url": f"https://www.youtube.com/watch?v={video_id}",
             "video_title": None, "comment": sn.get("textDisplay", ""), "likes": sn.get("likeCount", 0),
-            "date": sn.get("publishedAt"), "replies": reply_count, "is_reply": is_reply, "comment_id": item_id}
+            "date": sn.get("publishedAt"), "replies": reply_count, "is_reply": is_reply, "comment_id": item_id,
+            "author": (sn.get("authorChannelId") or {}).get("value")}
 
 
 def _replies(video_id, parent_id, api_key, cap):
@@ -91,6 +93,16 @@ def comments_for_video(video_id, api_key=None, max_comments=None, include_replie
         if not token:
             break
     return rows[:cap]
+
+
+def video_stats(video_id, api_key=None):
+    """The video's own public counts right now: views, likes, comments (1 quota unit). Missing values (hidden likes, comments
+    off) come back as None."""
+    data = _get("videos", {"part": "statistics", "id": video_id}, _key(api_key))
+    items = data.get("items") or []
+    st = items[0].get("statistics", {}) if items else {}
+    num = lambda k: int(st[k]) if st.get(k) is not None else None
+    return {"views": num("viewCount"), "video_likes": num("likeCount"), "video_comments": num("commentCount")}
 
 
 def fetch_comments(video_ids, api_key=None, max_comments=None, include_replies=None):
