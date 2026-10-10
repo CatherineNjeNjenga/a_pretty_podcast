@@ -51,6 +51,8 @@ def load(comments_path, guests_path):
 
 def tag(df):
     df["about"] = classify.classify(df)
+    df["focus"] = classify.focus_all(df, df["about"].values)   # Maria / Guest / Joint for Both comments, else None
+    df["work"], df["topic"] = classify.flags_all(df, df["about"].values)   # Work-term side (Maria/Guest/Both) and doping topic flag
     return df
 
 
@@ -68,6 +70,10 @@ def per_episode(df, min_named=10):
         gst = d["about"].isin(["Guest", "Both"])
         named = mar | gst
         w = d["likes"] + 1  # like-weighted: each comment counts 1 + its likes
+        foc = d["focus"] if "focus" in d else pd.Series(None, index=d.index, dtype=object)
+        both = d["about"] == "Both"
+        mar_f = (d["about"] == "Maria") | (both & (foc != "Guest"))      # Both counts for Maria unless it is guest-focused
+        gst_f = (d["about"] == "Guest") | (both & (foc != "Maria"))      # ...and for the guest unless it is Maria-focused
         rows.append({
             "video_id": vid, "guest": d["guest"].iloc[0], "guest_tier": d.get("guest_tier", pd.Series([np.nan])).iloc[0],
             "n_comments": len(d), "n_named": int(named.sum()),
@@ -75,9 +81,13 @@ def per_episode(df, min_named=10):
             "maria_share_named": mar.sum() / named.sum() if named.sum() else np.nan,
             "guest_share_named": gst.sum() / named.sum() if named.sum() else np.nan,
             "maria_likeshare": w[mar].sum() / w.sum(), "guest_likeshare": w[gst].sum() / w.sum(),
+            "maria_share_focus": mar_f.mean(), "guest_share_focus": gst_f.mean(),
             "only_maria_share": (d["about"] == "Maria").mean(), "only_guest_share": (d["about"] == "Guest").mean(),
             "both_share": (d["about"] == "Both").mean(), "show_share_all": (d["about"] == "Show").mean(),
             "neither_share_all": (d["about"] == "Neither").mean(),
+            "work_maria_share": d["work"].isin(["Maria", "Both"]).mean() if "work" in d else np.nan,
+            "work_guest_share": d["work"].isin(["Guest", "Both"]).mean() if "work" in d else np.nan,
+            "doping_share": (d["topic"] == "doping").mean() if "topic" in d else np.nan,
             **{f"share_{c.lower()}": (d["about"] == c).mean() for c in classify.CATEGORIES},
             "show_pos_share": ((d["about"] == "Show") & (d["compound"] > 0)).mean(),
             "show_neg_share": ((d["about"] == "Show") & (d["compound"] < 0)).mean(),
@@ -85,6 +95,8 @@ def per_episode(df, min_named=10):
     e = pd.DataFrame(rows)
     e["gap_all"] = e["maria_share_all"] - e["guest_share_all"]
     e["gap_likes"] = e["maria_likeshare"] - e["guest_likeshare"]
+    # Counting Both for both sides cancels out of the gap (same as leaving Both out), so the real sensitivity check is focus:
+    e["gap_focus"] = e["maria_share_focus"] - e["guest_share_focus"]   # Both assigned by focus
     e["reliable"] = e["n_named"] >= min_named
     return e
 
@@ -108,12 +120,17 @@ def boot_ci(x, n=10000):
 def verdict(e):
     r = e[e["reliable"]]
     out = []
-    for col, label in [("gap_all", "share of all comments"), ("gap_likes", "like-weighted share")]:
+    for col, label in [("gap_all", "share of all comments"), ("gap_likes", "like-weighted share"),
+                       ("gap_focus", "sensitivity: Both comments assigned by focus")]:
         x = r[col].dropna()
         n, k, p = sign_test(x)
         lo, hi = boot_ci(x)
         out.append(f"{label}: mean gap (Maria - guest) = {x.mean():+.3f} [95% CI {lo:+.3f}, {hi:+.3f}]; "
                    f"Maria ahead in {k}/{n} episodes; two-sided sign test p = {p:.4f}")
+    if "work_maria_share" in r and r["work_maria_share"].notna().any():
+        out.append("(not part of the gap) comments mentioning work terms: Maria's "
+                   f"{r['work_maria_share'].mean():.1%}, guests' {r['work_guest_share'].mean():.1%} of comments; "
+                   f"doping topic list: {r['doping_share'].mean():.1%} of comments (list is off unless set on in work_terms.csv)")
     return out
 
 
