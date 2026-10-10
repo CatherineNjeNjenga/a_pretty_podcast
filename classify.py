@@ -182,6 +182,22 @@ def _one(text, grx, gkey=""):
     return "Topic" if len(words) >= 5 else "Neither"
 
 
+def script_of(text):
+    """Writing system of a comment: cyrillic / latin / cjk / other letters, or 'none' for emoji, digits and symbols only."""
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return "none"
+    cy = sum("\u0400" <= ch <= "\u04ff" for ch in letters)
+    cj = sum("\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff" or "\uac00" <= ch <= "\ud7af" for ch in letters)
+    la = sum(ch.isascii() or "\u00c0" <= ch <= "\u024f" for ch in letters)
+    top = max((cy, "cyrillic"), (cj, "cjk"), (la, "latin"))
+    return top[1] if top[0] / len(letters) >= 0.5 else "other"
+
+
+def n_words(text):
+    return len(re.findall(r"\w+", URL_RX.sub(" ", text)))
+
+
 def _meta(df):
     cols = ["video_id", "guest_aliases"] + (["guest"] if "guest" in df else [])
     d = df.drop_duplicates("video_id")[cols]
