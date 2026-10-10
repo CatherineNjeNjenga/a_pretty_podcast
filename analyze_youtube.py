@@ -70,6 +70,15 @@ def _col(d, name):
     return d[name] if name in d else pd.Series(np.nan, index=d.index)
 
 
+def _kw_text(raw):
+    """Stored JSON keyword list -> 'lakers (41), basketball (33)' for the CSV."""
+    import json
+    try:
+        return ", ".join(f"{k['w']} ({k['n']})" for k in json.loads(raw))
+    except Exception:
+        return ""
+
+
 def _engagement(d, mar, gst):
     """Reach and depth measures that do not depend on the Maria/guest tags."""
     n = len(d)
@@ -106,6 +115,7 @@ def per_episode(df, min_named=10):
         mar_f = (d["about"] == "Maria") | (both & (foc != "Guest"))      # Both counts for Maria unless it is guest-focused
         gst_f = (d["about"] == "Guest") | (both & (foc != "Maria"))      # ...and for the guest unless it is Maria-focused
         eng = _engagement(d, mar, gst)
+        eng["keywords"] = _kw_text(_col(d, "keywords").iloc[0])
         rows.append({
             **eng,
             "video_id": vid, "guest": d["guest"].iloc[0], "guest_tier": d.get("guest_tier", pd.Series([np.nan])).iloc[0],
