@@ -17,7 +17,7 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS comments (
         video_id TEXT, comment_key TEXT, text TEXT, likes INTEGER, is_reply INTEGER,
         compound REAL, about TEXT, fetched_at TEXT, rules_version TEXT, focus TEXT, work TEXT, topic TEXT,
-        posted_at TEXT, script TEXT, words INTEGER, replies INTEGER, PRIMARY KEY (video_id, comment_key))""",
+        posted_at TEXT, script TEXT, words INTEGER, replies INTEGER, mode TEXT, PRIMARY KEY (video_id, comment_key))""",
     """CREATE TABLE IF NOT EXISTS weekly_metrics (
         run_date TEXT PRIMARY KEY, n_episodes INTEGER, mean_gap_all REAL, ci_lo REAL,
         ci_hi REAL, mean_gap_likes REAL, sign_p REAL, maria_ahead INTEGER)""",
@@ -106,7 +106,7 @@ def connect():
         db.execute(stmt)
     # Databases created before these columns existed: add them (old rows stay NULL).
     NEW = {"comments": [("rules_version", "TEXT"), ("focus", "TEXT"), ("work", "TEXT"), ("topic", "TEXT"), ("posted_at", "TEXT"),
-                        ("script", "TEXT"), ("words", "INTEGER"), ("replies", "INTEGER")],
+                        ("script", "TEXT"), ("words", "INTEGER"), ("replies", "INTEGER"), ("mode", "TEXT")],
            "episodes": [("views", "INTEGER"), ("video_likes", "INTEGER"), ("video_comments", "INTEGER"),
                         ("views_at", "TEXT"), ("authors", "INTEGER"), ("keywords", "TEXT"), ("requested", "TEXT")]}
     for table, cols in NEW.items():
