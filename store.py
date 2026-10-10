@@ -13,7 +13,7 @@ SCHEMA = [
         video_id TEXT PRIMARY KEY, video_url TEXT, published TEXT, guest TEXT,
         guest_aliases TEXT, guest_tier INTEGER, status TEXT DEFAULT 'pending',
         n_comments INTEGER, snapshot_at TEXT, views INTEGER, video_likes INTEGER, video_comments INTEGER,
-        views_at TEXT, authors INTEGER, keywords TEXT, requested TEXT)""",
+        views_at TEXT, authors INTEGER, keywords TEXT, requested TEXT, alias_suggestions TEXT)""",
     """CREATE TABLE IF NOT EXISTS comments (
         video_id TEXT, comment_key TEXT, text TEXT, likes INTEGER, is_reply INTEGER,
         compound REAL, about TEXT, fetched_at TEXT, rules_version TEXT, focus TEXT, work TEXT, topic TEXT,
@@ -108,7 +108,7 @@ def connect():
     NEW = {"comments": [("rules_version", "TEXT"), ("focus", "TEXT"), ("work", "TEXT"), ("topic", "TEXT"), ("posted_at", "TEXT"),
                         ("script", "TEXT"), ("words", "INTEGER"), ("replies", "INTEGER"), ("mode", "TEXT")],
            "episodes": [("views", "INTEGER"), ("video_likes", "INTEGER"), ("video_comments", "INTEGER"),
-                        ("views_at", "TEXT"), ("authors", "INTEGER"), ("keywords", "TEXT"), ("requested", "TEXT")]}
+                        ("views_at", "TEXT"), ("authors", "INTEGER"), ("keywords", "TEXT"), ("requested", "TEXT"), ("alias_suggestions", "TEXT")]}
     for table, cols in NEW.items():
         try:
             have = [r["name"] for r in db.execute(f"PRAGMA table_info({table})")]
